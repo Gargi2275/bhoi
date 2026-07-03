@@ -12,7 +12,20 @@ from .views import (
     MessageRequestViewSet, ConversationViewSet, MessageViewSet,
     BookingPropertyViewSet, PropertyResourceViewSet, ResourcePricingViewSet,
     VenueBookingViewSet, BookingInspectionViewSet, BookingRefundViewSet, BookingWaitingListViewSet,
-    ResourceLockViewSet, ResourceDependencyViewSet
+    ResourceLockViewSet, ResourceDependencyViewSet,
+    FeatureMasterViewSet, PlanFeaturePermissionViewSet, CommunitySubscriptionViewSet,
+    SubscriptionHistoryViewSet, PlanAddonViewSet, FeatureUsageViewSet, SubscriptionAuditLogViewSet,
+    ApplicationModuleViewSet, ApplicationActionViewSet, ModuleActionViewSet, ApplicationModuleAuditLogViewSet,
+    # Phase 2: Member Premium
+    MemberPremiumPlanViewSet, MemberPremiumFeatureViewSet, MemberPremiumBenefitViewSet,
+    MemberPremiumAddonViewSet, MemberPremiumCouponViewSet, MemberPremiumSubscriptionViewSet,
+    MemberFeatureUsageViewSet, MemberPremiumTransactionViewSet, MemberPremiumInvoiceViewSet,
+    MemberAddonPurchaseViewSet, MemberPremiumAuditLogViewSet,
+    MemberPremiumRewardViewSet, MemberPremiumSupportTicketViewSet, PremiumFeatureRegistryViewSet,
+    # Phase 3.3: Community Subscriptions
+    CommunityLicenseViewSet, CommunityModuleAccessViewSet, CommunityUsageViewSet,
+    CommunityBillingViewSet, CommunityInvoiceViewSet, CommunityTransactionViewSet,
+    CommunityAddonViewSet, CommunityAuditLogViewSet,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -35,6 +48,13 @@ router.register(r'event-registrations', EventRegistrationViewSet, basename='even
 router.register(r'notifications', NotificationViewSet, basename='notification')
 router.register(r'approval-history', CommunityApprovalHistoryViewSet, basename='approval-history')
 router.register(r'plans', SubscriptionPlanViewSet, basename='plan')
+router.register(r'features', FeatureMasterViewSet, basename='feature')
+router.register(r'plan-permissions', PlanFeaturePermissionViewSet, basename='plan-permission')
+router.register(r'community-subscriptions', CommunitySubscriptionViewSet, basename='community-subscription')
+router.register(r'subscription-history', SubscriptionHistoryViewSet, basename='subscription-history')
+router.register(r'plan-addons', PlanAddonViewSet, basename='plan-addon')
+router.register(r'feature-usages', FeatureUsageViewSet, basename='feature-usage')
+router.register(r'subscription-audit-logs', SubscriptionAuditLogViewSet, basename='subscription-audit-log')
 router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'advertisements', AdvertisementViewSet, basename='advertisement')
 router.register(r'gallery', GalleryViewSet, basename='gallery')
@@ -50,6 +70,36 @@ router.register(r'booking-refunds', BookingRefundViewSet, basename='booking-refu
 router.register(r'booking-waiting-list', BookingWaitingListViewSet, basename='booking-waiting-list')
 router.register(r'resource-locks', ResourceLockViewSet, basename='resource-lock')
 router.register(r'resource-dependencies', ResourceDependencyViewSet, basename='resource-dependency')
+router.register(r'modules', ApplicationModuleViewSet, basename='module')
+router.register(r'actions', ApplicationActionViewSet, basename='action')
+router.register(r'module-actions', ModuleActionViewSet, basename='module-action')
+router.register(r'module-audit-logs', ApplicationModuleAuditLogViewSet, basename='module-audit-log')
+# Phase 2: Member Premium
+router.register(r'member-premium-plans', MemberPremiumPlanViewSet, basename='member-premium-plan')
+router.register(r'member-premium-features', MemberPremiumFeatureViewSet, basename='member-premium-feature')
+router.register(r'member-premium-benefits', MemberPremiumBenefitViewSet, basename='member-premium-benefit')
+router.register(r'member-premium-addons', MemberPremiumAddonViewSet, basename='member-premium-addon')
+router.register(r'member-premium-coupons', MemberPremiumCouponViewSet, basename='member-premium-coupon')
+router.register(r'member-premium-subscriptions', MemberPremiumSubscriptionViewSet, basename='member-premium-subscription')
+router.register(r'member-feature-usages', MemberFeatureUsageViewSet, basename='member-feature-usage')
+router.register(r'member-premium-transactions', MemberPremiumTransactionViewSet, basename='member-premium-transaction')
+router.register(r'member-premium-invoices', MemberPremiumInvoiceViewSet, basename='member-premium-invoice')
+router.register(r'member-addon-purchases', MemberAddonPurchaseViewSet, basename='member-addon-purchase')
+router.register(r'member-premium-audit-logs', MemberPremiumAuditLogViewSet, basename='member-premium-audit-log')
+router.register(r'member-premium-rewards', MemberPremiumRewardViewSet, basename='member-premium-reward')
+router.register(r'member-premium-tickets', MemberPremiumSupportTicketViewSet, basename='member-premium-ticket')
+router.register(r'premium-feature-registry', PremiumFeatureRegistryViewSet, basename='premium-feature-registry')
+
+
+# Phase 3.3: Community Subscriptions
+router.register(r'community-licenses', CommunityLicenseViewSet, basename='community-license')
+router.register(r'community-module-accesses', CommunityModuleAccessViewSet, basename='community-module-access')
+router.register(r'community-usages', CommunityUsageViewSet, basename='community-usage')
+router.register(r'community-billings', CommunityBillingViewSet, basename='community-billing')
+router.register(r'community-invoices', CommunityInvoiceViewSet, basename='community-invoice')
+router.register(r'community-transactions', CommunityTransactionViewSet, basename='community-transaction')
+router.register(r'community-addons', CommunityAddonViewSet, basename='community-addon')
+router.register(r'community-audit-logs', CommunityAuditLogViewSet, basename='community-audit-log')
 
 urlpatterns = [
     # Router endpoints

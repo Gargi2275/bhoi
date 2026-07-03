@@ -26,9 +26,9 @@ import { Route as CommunityAdminIndexRouteImport } from './routes/community-admi
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as RegisterCommunityRouteImport } from './routes/register.community'
 import { Route as DashboardVenuesRouteImport } from './routes/dashboard.venues'
+import { Route as DashboardSubscriptionRouteImport } from './routes/dashboard.subscription'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
 import { Route as DashboardProfileRouteImport } from './routes/dashboard.profile'
-import { Route as DashboardPlanRouteImport } from './routes/dashboard.plan'
 import { Route as DashboardNotificationsRouteImport } from './routes/dashboard.notifications'
 import { Route as DashboardMessagesRouteImport } from './routes/dashboard.messages'
 import { Route as DashboardMatrimonyRouteImport } from './routes/dashboard.matrimony'
@@ -62,6 +62,7 @@ import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminMembersRouteImport } from './routes/admin.members'
+import { Route as AdminMemberPremiumRouteImport } from './routes/admin.member-premium'
 import { Route as AdminMatrimonyRouteImport } from './routes/admin.matrimony'
 import { Route as AdminJobsBusinessesRouteImport } from './routes/admin.jobs-businesses'
 import { Route as AdminEventsRouteImport } from './routes/admin.events'
@@ -157,6 +158,11 @@ const DashboardVenuesRoute = DashboardVenuesRouteImport.update({
   path: '/venues',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardSubscriptionRoute = DashboardSubscriptionRouteImport.update({
+  id: '/subscription',
+  path: '/subscription',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardSettingsRoute = DashboardSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -165,11 +171,6 @@ const DashboardSettingsRoute = DashboardSettingsRouteImport.update({
 const DashboardProfileRoute = DashboardProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardPlanRoute = DashboardPlanRouteImport.update({
-  id: '/plan',
-  path: '/plan',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardNotificationsRoute = DashboardNotificationsRouteImport.update({
@@ -340,6 +341,11 @@ const AdminMembersRoute = AdminMembersRouteImport.update({
   path: '/members',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminMemberPremiumRoute = AdminMemberPremiumRouteImport.update({
+  id: '/member-premium',
+  path: '/member-premium',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminMatrimonyRoute = AdminMatrimonyRouteImport.update({
   id: '/matrimony',
   path: '/matrimony',
@@ -407,6 +413,7 @@ export interface FileRoutesByFullPath {
   '/admin/events': typeof AdminEventsRoute
   '/admin/jobs-businesses': typeof AdminJobsBusinessesRoute
   '/admin/matrimony': typeof AdminMatrimonyRoute
+  '/admin/member-premium': typeof AdminMemberPremiumRoute
   '/admin/members': typeof AdminMembersRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -440,9 +447,9 @@ export interface FileRoutesByFullPath {
   '/dashboard/matrimony': typeof DashboardMatrimonyRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/plan': typeof DashboardPlanRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
+  '/dashboard/subscription': typeof DashboardSubscriptionRoute
   '/dashboard/venues': typeof DashboardVenuesRoute
   '/register/community': typeof RegisterCommunityRoute
   '/admin/': typeof AdminIndexRoute
@@ -467,6 +474,7 @@ export interface FileRoutesByTo {
   '/admin/events': typeof AdminEventsRoute
   '/admin/jobs-businesses': typeof AdminJobsBusinessesRoute
   '/admin/matrimony': typeof AdminMatrimonyRoute
+  '/admin/member-premium': typeof AdminMemberPremiumRoute
   '/admin/members': typeof AdminMembersRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -500,9 +508,9 @@ export interface FileRoutesByTo {
   '/dashboard/matrimony': typeof DashboardMatrimonyRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/plan': typeof DashboardPlanRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
+  '/dashboard/subscription': typeof DashboardSubscriptionRoute
   '/dashboard/venues': typeof DashboardVenuesRoute
   '/register/community': typeof RegisterCommunityRoute
   '/admin': typeof AdminIndexRoute
@@ -532,6 +540,7 @@ export interface FileRoutesById {
   '/admin/events': typeof AdminEventsRoute
   '/admin/jobs-businesses': typeof AdminJobsBusinessesRoute
   '/admin/matrimony': typeof AdminMatrimonyRoute
+  '/admin/member-premium': typeof AdminMemberPremiumRoute
   '/admin/members': typeof AdminMembersRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/roles': typeof AdminRolesRoute
@@ -565,9 +574,9 @@ export interface FileRoutesById {
   '/dashboard/matrimony': typeof DashboardMatrimonyRoute
   '/dashboard/messages': typeof DashboardMessagesRoute
   '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/plan': typeof DashboardPlanRoute
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
+  '/dashboard/subscription': typeof DashboardSubscriptionRoute
   '/dashboard/venues': typeof DashboardVenuesRoute
   '/register/community': typeof RegisterCommunityRoute
   '/admin/': typeof AdminIndexRoute
@@ -598,6 +607,7 @@ export interface FileRouteTypes {
     | '/admin/events'
     | '/admin/jobs-businesses'
     | '/admin/matrimony'
+    | '/admin/member-premium'
     | '/admin/members'
     | '/admin/reports'
     | '/admin/roles'
@@ -631,9 +641,9 @@ export interface FileRouteTypes {
     | '/dashboard/matrimony'
     | '/dashboard/messages'
     | '/dashboard/notifications'
-    | '/dashboard/plan'
     | '/dashboard/profile'
     | '/dashboard/settings'
+    | '/dashboard/subscription'
     | '/dashboard/venues'
     | '/register/community'
     | '/admin/'
@@ -658,6 +668,7 @@ export interface FileRouteTypes {
     | '/admin/events'
     | '/admin/jobs-businesses'
     | '/admin/matrimony'
+    | '/admin/member-premium'
     | '/admin/members'
     | '/admin/reports'
     | '/admin/roles'
@@ -691,9 +702,9 @@ export interface FileRouteTypes {
     | '/dashboard/matrimony'
     | '/dashboard/messages'
     | '/dashboard/notifications'
-    | '/dashboard/plan'
     | '/dashboard/profile'
     | '/dashboard/settings'
+    | '/dashboard/subscription'
     | '/dashboard/venues'
     | '/register/community'
     | '/admin'
@@ -722,6 +733,7 @@ export interface FileRouteTypes {
     | '/admin/events'
     | '/admin/jobs-businesses'
     | '/admin/matrimony'
+    | '/admin/member-premium'
     | '/admin/members'
     | '/admin/reports'
     | '/admin/roles'
@@ -755,9 +767,9 @@ export interface FileRouteTypes {
     | '/dashboard/matrimony'
     | '/dashboard/messages'
     | '/dashboard/notifications'
-    | '/dashboard/plan'
     | '/dashboard/profile'
     | '/dashboard/settings'
+    | '/dashboard/subscription'
     | '/dashboard/venues'
     | '/register/community'
     | '/admin/'
@@ -901,6 +913,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardVenuesRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/subscription': {
+      id: '/dashboard/subscription'
+      path: '/subscription'
+      fullPath: '/dashboard/subscription'
+      preLoaderRoute: typeof DashboardSubscriptionRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/settings': {
       id: '/dashboard/settings'
       path: '/settings'
@@ -913,13 +932,6 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/dashboard/profile'
       preLoaderRoute: typeof DashboardProfileRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/plan': {
-      id: '/dashboard/plan'
-      path: '/plan'
-      fullPath: '/dashboard/plan'
-      preLoaderRoute: typeof DashboardPlanRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/notifications': {
@@ -1153,6 +1165,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminMembersRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/member-premium': {
+      id: '/admin/member-premium'
+      path: '/member-premium'
+      fullPath: '/admin/member-premium'
+      preLoaderRoute: typeof AdminMemberPremiumRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/matrimony': {
       id: '/admin/matrimony'
       path: '/matrimony'
@@ -1229,6 +1248,7 @@ interface AdminRouteChildren {
   AdminEventsRoute: typeof AdminEventsRoute
   AdminJobsBusinessesRoute: typeof AdminJobsBusinessesRoute
   AdminMatrimonyRoute: typeof AdminMatrimonyRoute
+  AdminMemberPremiumRoute: typeof AdminMemberPremiumRoute
   AdminMembersRoute: typeof AdminMembersRoute
   AdminReportsRoute: typeof AdminReportsRoute
   AdminRolesRoute: typeof AdminRolesRoute
@@ -1248,6 +1268,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminEventsRoute: AdminEventsRoute,
   AdminJobsBusinessesRoute: AdminJobsBusinessesRoute,
   AdminMatrimonyRoute: AdminMatrimonyRoute,
+  AdminMemberPremiumRoute: AdminMemberPremiumRoute,
   AdminMembersRoute: AdminMembersRoute,
   AdminReportsRoute: AdminReportsRoute,
   AdminRolesRoute: AdminRolesRoute,
@@ -1316,9 +1337,9 @@ interface DashboardRouteChildren {
   DashboardMatrimonyRoute: typeof DashboardMatrimonyRoute
   DashboardMessagesRoute: typeof DashboardMessagesRoute
   DashboardNotificationsRoute: typeof DashboardNotificationsRoute
-  DashboardPlanRoute: typeof DashboardPlanRoute
   DashboardProfileRoute: typeof DashboardProfileRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
+  DashboardSubscriptionRoute: typeof DashboardSubscriptionRoute
   DashboardVenuesRoute: typeof DashboardVenuesRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
@@ -1334,9 +1355,9 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardMatrimonyRoute: DashboardMatrimonyRoute,
   DashboardMessagesRoute: DashboardMessagesRoute,
   DashboardNotificationsRoute: DashboardNotificationsRoute,
-  DashboardPlanRoute: DashboardPlanRoute,
   DashboardProfileRoute: DashboardProfileRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,
+  DashboardSubscriptionRoute: DashboardSubscriptionRoute,
   DashboardVenuesRoute: DashboardVenuesRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }

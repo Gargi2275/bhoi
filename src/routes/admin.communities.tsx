@@ -6,7 +6,7 @@ import {
   Youtube, Twitter, Users, Building, Heart, ShieldAlert, Award, CalendarDays, ExternalLink
 } from "lucide-react";
 import { PageWrap } from "@/components/wag/PageWrap";
-import { AnimatedCard, DetailDrawer, PlanBadge, StatusBadge, EmptyState, Modal } from "@/components/wag/primitives";
+import { AnimatedCard, DetailDrawer, StatusBadge, EmptyState, Modal } from "@/components/wag/primitives";
 import { api } from "@/lib/api";
 
 export const Route = createFileRoute("/admin/communities")({
@@ -353,7 +353,7 @@ export const Route = createFileRoute("/admin/communities")({
                           {(c.member_count ?? 0).toLocaleString()}
                         </td>
                         <td className="p-4">
-                          <PlanBadge plan={c.plan} />
+                          {/* Plan removed */}
                         </td>
                         <td className="p-4">
                           {getStatusBadge(c.status)}

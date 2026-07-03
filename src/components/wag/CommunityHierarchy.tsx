@@ -359,7 +359,7 @@ export const CommunityHierarchy = () => {
   const fetchHierarchy = async () => {
     try {
       const token = localStorage.getItem("wag_token");
-      const res = await fetch("http://localhost:8000/api/communities/hierarchy/", {
+      const res = await fetch(`/api/communities/hierarchy/`, {
         headers: {
           "Authorization": token ? `Bearer ${token}` : ""
         }
@@ -499,7 +499,7 @@ export const CommunityHierarchy = () => {
         parent: newCommParentId ? parseInt(newCommParentId) : null
       };
 
-      const res = await fetch("http://localhost:8000/api/communities/", {
+      const res = await fetch(`/api/communities/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

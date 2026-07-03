@@ -17,7 +17,7 @@ import {
   Filter, FileSpreadsheet, RefreshCw, CalendarDays, Check, Slash, ChevronLeft, Wallet, Sliders
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -48,6 +48,8 @@ const AMENITIES_LIST = [
 
 type LocalTab = 'overview' | 'add-property' | 'bookings' | 'ledger' | 'payments' | 'waiting' | 'settings';
 
+let isFirstLoad = true;
+
 export function AdminVenues() {
   const { user } = useAuth();
   const search = useSearch({ strict: false }) as any;
@@ -63,16 +65,18 @@ export function AdminVenues() {
       if (tabParam && ['overview', 'add-property', 'bookings', 'ledger', 'payments', 'waiting', 'settings'].includes(tabParam)) {
         return tabParam;
       }
-      const savedTab = sessionStorage.getItem('venues_active_tab');
-      if (savedTab && ['overview', 'add-property', 'bookings', 'ledger', 'payments', 'waiting', 'settings'].includes(savedTab)) {
-        return savedTab as LocalTab;
+      if (isFirstLoad) {
+        const savedTab = sessionStorage.getItem('venues_active_tab');
+        if (savedTab && ['overview', 'add-property', 'bookings', 'ledger', 'payments', 'waiting', 'settings'].includes(savedTab)) {
+          return savedTab as LocalTab;
+        }
       }
     }
     return 'overview';
   });
 
   const [workflowStep, _setWorkflowStep] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const savedStep = sessionStorage.getItem('venues_workflow_step');
       return savedStep ? parseInt(savedStep, 10) : 1;
     }
@@ -84,12 +88,20 @@ export function AdminVenues() {
     sessionStorage.setItem('venues_active_tab', tab);
     navigate({
       search: (prev: any) => ({ ...prev, tab })
-    });
+    } as any);
   };
 
-  const setWorkflowStep = (step: number) => {
-    _setWorkflowStep(step);
-    sessionStorage.setItem('venues_workflow_step', String(step));
+  const setWorkflowStep = (step: number | ((prev: number) => number)) => {
+    const resolveStep = (prev: number) => typeof step === 'function' ? step(prev) : step;
+    _setWorkflowStep(prev => {
+      const nextStep = resolveStep(prev);
+      if (nextStep > 1 && !selectedPropertyForWizard) {
+        toast.error("Please enter and save property details in Step 1 first.");
+        return prev;
+      }
+      sessionStorage.setItem('venues_workflow_step', String(nextStep));
+      return nextStep;
+    });
   };
 
   const [loading, setLoading] = useState(true);
@@ -104,17 +116,72 @@ export function AdminVenues() {
   const [members, setMembers] = useState<any[]>([]);
   const [dependenciesList, setDependenciesList] = useState<any[]>([]);
 
-  // Step 3 Page State
+  // Step 3 Page State & Modals
   const [step3Page, setStep3Page] = useState(1);
+  const [editingResource, setEditingResource] = useState<any>(null);
+  const [editResourceForm, setEditResourceForm] = useState<any>(null);
+  const [selectedResourceIds, setSelectedResourceIds] = useState<Set<number>>(new Set());
+
+  // Dynamic Amenities States
+  const [newAmenityInput, setNewAmenityInput] = useState("");
+  const [customAmenities, setCustomAmenities] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('venues_custom_amenities');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {}
+      }
+    }
+    return [];
+  });
+
+  const handleAddCustomAmenity = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (!customAmenities.includes(trimmed)) {
+      const updated = [...customAmenities, trimmed];
+      setCustomAmenities(updated);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('venues_custom_amenities', JSON.stringify(updated));
+      }
+      toast.success(`Amenity "${trimmed}" added successfully!`);
+    } else {
+      toast.info(`Amenity "${trimmed}" already exists.`);
+    }
+  };
 
   // Step 5 Add-ons States
-  const [addonForm, setAddonForm] = useState({ name: '', price: '', hourly_rate: '', daily_rate: '' });
-  const [addonsList, setAddonsList] = useState<any[]>([]);
+  const [addonForm, setAddonForm] = useState({ name: '', hourly_rate: '', half_day_hours: '6', half_day_rate: '', full_day_rate: '', deposit_amount: '' });
+  const [addonsList, setAddonsList] = useState<any[]>(() => {
+    if (typeof window !== 'undefined' && isFirstLoad) {
+      try {
+        const saved = sessionStorage.getItem('venues_wizard_prop');
+        if (saved) {
+          const prop = JSON.parse(saved);
+          if (prop && prop.internal_notes) {
+            const parsed = JSON.parse(prop.internal_notes);
+            if (parsed && Array.isArray(parsed.addons)) return parsed.addons;
+          }
+        }
+      } catch(e) {}
+    }
+    return [];
+  });
   const [savingAddon, setSavingAddon] = useState(false);
+
+  // Lightbox Preview State
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+
+  // Super Admin Property Approval States
+  const [approvalFilter, setApprovalFilter] = useState<'Pending Approval' | 'Approved' | 'Rejected' | 'All'>('Pending Approval');
+  const [rejectReasonInput, setRejectReasonInput] = useState("");
+  const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
+  const [propertyToReject, setPropertyToReject] = useState<any>(null);
 
   // Wizard Flow States (Step 1 to 12)
   const [selectedPropertyForWizard, setSelectedPropertyForWizardState] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_wizard_prop');
       return saved ? JSON.parse(saved) : null;
     }
@@ -130,10 +197,24 @@ export function AdminVenues() {
         sessionStorage.removeItem('venues_wizard_prop');
       }
     }
+    if (prop) {
+      try {
+        if (prop.internal_notes) {
+          const parsed = JSON.parse(prop.internal_notes);
+          if (parsed && Array.isArray(parsed.addons)) {
+            setAddonsList(parsed.addons);
+            return;
+          }
+        }
+      } catch (e) {}
+      setAddonsList([]);
+    } else {
+      setAddonsList([]);
+    }
   };
 
   const [selectedResourceForPricing, setSelectedResourceForPricing] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_resource_for_pricing');
       return saved ? JSON.parse(saved) : null;
     }
@@ -142,7 +223,7 @@ export function AdminVenues() {
 
   // Details Modal States
   const [selectedPropertyForDetails, setSelectedPropertyForDetails] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_property_for_details');
       return saved ? JSON.parse(saved) : null;
     }
@@ -150,7 +231,7 @@ export function AdminVenues() {
   });
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_is_details_open');
       return saved ? JSON.parse(saved) : false;
     }
@@ -168,12 +249,12 @@ export function AdminVenues() {
       photos: [] as string[],
       uploaded_photos: [] as File[],
       cancellation_allowed: true, cancellation_hours: 24, refund_percentage: 100, security_deposit: 0,
-      approval_required: true, manual_payment_allowed: true,
+      approval_required: true, manual_payment_allowed: true, tax_percentage: 18.0,
       terms_conditions: "", internal_notes: "",
       rejection_reason: "",
       amenities: [] as string[]
     };
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_property_form');
       if (saved) {
         try {
@@ -211,7 +292,7 @@ export function AdminVenues() {
     } else {
       navigate({
         search: (prev: any) => ({ ...prev, tab: activeTab })
-      });
+      } as any);
     }
   }, [tabFromSearch]);
 
@@ -221,13 +302,13 @@ export function AdminVenues() {
     const defaultVal = {
       name: "", resource_type: "Hall", capacity: 500, description: "",
       booking_type: "Full Day", status: "Active",
-      hourly_rate: 0, half_day_rate: 0, full_day_rate: 0, security_deposit: 0,
+      hourly_rate: 0, half_day_hours: 6, half_day_rate: 0, full_day_rate: 0, security_deposit: 0,
       min_booking_duration_hours: 1, max_booking_duration_hours: 24,
       setup_buffer_hours: 0, cleanup_buffer_hours: 0,
       isBulk: false, prefix: "Room", range_start: 1, range_end: 10,
-      dependencies: [] as number[]
+      dependencies: [] as number[], amenities: [] as string[]
     };
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_resource_form');
       return saved ? JSON.parse(saved) : defaultVal;
     }
@@ -252,7 +333,7 @@ export function AdminVenues() {
       member_vip: "4000",
       member_committee: "0"
     };
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_pricing_form');
       return saved ? JSON.parse(saved) : defaultVal;
     }
@@ -262,7 +343,7 @@ export function AdminVenues() {
   const [adminNotes, setAdminNotes] = useState("");
   const [transactionIdInput, setTransactionIdInput] = useState("TXN-2025-88990");
   const [bookingTabFilter, setBookingTabFilter] = useState<'All' | 'Pending' | 'Confirmed' | 'Cancelled'>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_booking_tab_filter');
       if (saved && ['All', 'Pending', 'Confirmed', 'Cancelled'].includes(saved)) {
         return saved as 'All' | 'Pending' | 'Confirmed' | 'Cancelled';
@@ -272,30 +353,69 @@ export function AdminVenues() {
   });
 
   const [bookingSearch, setBookingSearch] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       return sessionStorage.getItem('venues_booking_search') || "";
     }
     return "";
   });
 
   const [bookingDateFilter, setBookingDateFilter] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       return sessionStorage.getItem('venues_booking_date_filter') || "All Dates";
     }
     return "All Dates";
   });
 
   const [roomRangeForm, setRoomRangeForm] = useState(() => {
-    const defaultVal = { resource_name: "Standard Room", prefix: "Room", start_num: 1, end_num: 50, digits: 2, amenities: [] as string[] };
-    if (typeof window !== 'undefined') {
+    const defaultVal = {
+      resource_name: "Standard Room",
+      prefix: "Room",
+      start_num: 1,
+      end_num: 50,
+      digits: 2,
+      amenities: [] as string[],
+      resource_type: "Room",
+      capacity: 4,
+      hourly_rate: 0,
+      half_day_hours: 6,
+      half_day_rate: 0,
+      full_day_rate: 0
+    };
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_room_range_form');
       return saved ? JSON.parse(saved) : defaultVal;
     }
     return defaultVal;
   });
 
+  const handleAddCustomAmenityForSingle = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    handleAddCustomAmenity(trimmed);
+    if (!resourceForm.amenities?.includes(trimmed)) {
+      setResourceForm((prev: any) => ({
+        ...prev,
+        amenities: [...(prev.amenities || []), trimmed]
+      }));
+    }
+    setNewAmenityInput("");
+  };
+
+  const handleAddCustomAmenityForRange = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    handleAddCustomAmenity(trimmed);
+    if (!roomRangeForm.amenities?.includes(trimmed)) {
+      setRoomRangeForm((prev: any) => ({
+        ...prev,
+        amenities: [...(prev.amenities || []), trimmed]
+      }));
+    }
+    setNewAmenityInput("");
+  };
+
   const [selectedPropertyForResourcesTab, setSelectedPropertyForResourcesTab] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_property_for_resources_tab');
       return saved ? JSON.parse(saved) : null;
     }
@@ -303,7 +423,7 @@ export function AdminVenues() {
   });
 
   const [selectedPropertyForDependenciesTab, setSelectedPropertyForDependenciesTab] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_property_for_dependencies_tab');
       return saved ? JSON.parse(saved) : null;
     }
@@ -311,7 +431,7 @@ export function AdminVenues() {
   });
 
   const [selectedPropertyForPricingTab, setSelectedPropertyForPricingTab] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_property_for_pricing_tab');
       return saved ? JSON.parse(saved) : null;
     }
@@ -319,7 +439,7 @@ export function AdminVenues() {
   });
 
   const [selectedResourceForPricingTab, setSelectedResourceForPricingTab] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_selected_resource_for_pricing_tab');
       return saved ? JSON.parse(saved) : null;
     }
@@ -327,7 +447,7 @@ export function AdminVenues() {
   });
 
   const [pricingModel, setPricingModel] = useState<'hourly' | 'half_day' | 'full_day' | 'custom'>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_pricing_model');
       if (saved && ['hourly', 'half_day', 'full_day', 'custom'].includes(saved)) {
         return saved as 'hourly' | 'half_day' | 'full_day' | 'custom';
@@ -338,7 +458,7 @@ export function AdminVenues() {
 
   const [customPricings, setCustomPricings] = useState(() => {
     const defaultVal = { hourly_price: 500, min_hours: 2, max_hours: 12, security_deposit: 5000, cleaning_charges: 1000, tax_percent: 18, notes: "", has_security_deposit: true, has_cleaning_charges: true };
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_custom_pricings');
       return saved ? JSON.parse(saved) : defaultVal;
     }
@@ -347,10 +467,13 @@ export function AdminVenues() {
   
   const [parentResourceDependency, setParentResourceDependency] = useState("");
   const [requiredResourceDependency, setRequiredResourceDependency] = useState("");
+  const [dependencyRuleType, setDependencyRuleType] = useState<'parent_child' | 'combination'>('parent_child');
+  const [whenMemberBooks, setWhenMemberBooks] = useState("");
+  const [requireTheseResources, setRequireTheseResources] = useState("");
   const [globalAmenities, setGlobalAmenities] = useState<any[]>(AMENITIES_LIST);
 
   const [amenitySearch, setAmenitySearch] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       return sessionStorage.getItem('venues_amenity_search') || "";
     }
     return "";
@@ -361,7 +484,7 @@ export function AdminVenues() {
   
   const [viewingBooking, setViewingBooking] = useState<any>(null);
   const [ledgerSubTab, setLedgerSubTab] = useState<'list' | 'calendar' | 'charts'>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_ledger_sub_tab');
       if (saved && ['list', 'calendar', 'charts'].includes(saved)) {
         return saved as 'list' | 'calendar' | 'charts';
@@ -371,25 +494,23 @@ export function AdminVenues() {
   });
   const [rejectDialogProperty, setRejectDialogProperty] = useState<any>(null);
   const [rejectReason, setRejectReason] = useState("");
-  const [resourceAddMode, setResourceAddMode] = useState<'single' | 'bulk' | 'range'>(() => {
-    if (typeof window !== 'undefined') {
+  const [resourceAddMode, setResourceAddMode] = useState<'single' | 'range'>(() => {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       const saved = sessionStorage.getItem('venues_resource_add_mode');
-      if (saved && ['single', 'bulk', 'range'].includes(saved)) {
-        return saved as 'single' | 'bulk' | 'range';
-      }
+      if (saved === 'single' || saved === 'range') return saved;
     }
     return 'single';
   });
 
   const [resourceSearch, setResourceSearch] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       return sessionStorage.getItem('venues_resource_search') || "";
     }
     return "";
   });
 
   const [resourceTypeFilter, setResourceTypeFilter] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isFirstLoad) {
       return sessionStorage.getItem('venues_resource_type_filter') || "All";
     }
     return "All";
@@ -405,14 +526,29 @@ export function AdminVenues() {
     longitude: property?.longitude ?? "",
   });
 
-  const buildPropertyPayload = () => {
+  const buildPropertyPayload = (isPublishing = false) => {
     const { uploaded_photos, ...payload } = propertyForm as any;
+    let finalStatus = "Draft";
+    if (isSuperAdmin) {
+      finalStatus = payload.status || "Approved";
+    } else if (isPublishing) {
+      finalStatus = "Pending Approval";
+    } else {
+      finalStatus = selectedPropertyForWizard?.status || "Draft";
+    }
+
+    const serializedNotes = JSON.stringify({
+      addons: addonsList
+    });
+
     return {
       ...payload,
       uploaded_photos,
-      status: isSuperAdmin ? payload.status : "Pending Approval",
+      status: finalStatus,
+      internal_notes: serializedNotes,
       latitude: payload.latitude === "" ? null : payload.latitude,
       longitude: payload.longitude === "" ? null : payload.longitude,
+      tax_percentage: payload.tax_percentage,
     };
   };
 
@@ -451,10 +587,7 @@ export function AdminVenues() {
   // Sync state with sessionStorage or reset on fresh visit from another route
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const prevPath = sessionStorage.getItem('venues_prev_path');
-      const currentPath = window.location.pathname;
-      
-      if (prevPath && prevPath !== currentPath) {
+      if (!isFirstLoad) {
         resetSessionState();
         
         _setActiveTab('overview');
@@ -511,9 +644,9 @@ export function AdminVenues() {
         setPricingModel('hourly');
         setLedgerSubTab('list');
         setResourceAddMode('single');
+      } else {
+        isFirstLoad = false;
       }
-      
-      sessionStorage.setItem('venues_prev_path', currentPath);
     }
   }, []);
 
@@ -673,7 +806,46 @@ export function AdminVenues() {
         api.getMembers(params).catch(() => [])
       ]);
       setProperties(propsRes || []);
-      setResources(resRes || []);
+      const parsedResources = (resRes || []).map((r: any) => {
+        let parsedAmenities: string[] = [];
+        if (Array.isArray(r.amenities)) {
+          parsedAmenities = r.amenities;
+        } else if (typeof r.amenities === 'string') {
+          try {
+            const parsed = JSON.parse(r.amenities);
+            if (Array.isArray(parsed)) {
+              parsedAmenities = parsed;
+            } else {
+              parsedAmenities = r.amenities.split(',').map((s: string) => s.trim()).filter(Boolean);
+            }
+          } catch (e) {
+            parsedAmenities = r.amenities.split(',').map((s: string) => s.trim()).filter(Boolean);
+          }
+        }
+        return {
+          ...r,
+          amenities: parsedAmenities
+        };
+      });
+      setResources(parsedResources);
+
+      // Extract unique amenities to keep customAmenities list synchronized
+      const uniqueAmenities = new Set<string>();
+      parsedResources.forEach((r: any) => {
+        r.amenities.forEach((a: string) => {
+          if (a && typeof a === 'string') {
+            uniqueAmenities.add(a.trim());
+          }
+        });
+      });
+      setCustomAmenities((prev) => {
+        const merged = new Set([...prev, ...uniqueAmenities]);
+        const arr = Array.from(merged);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('venues_custom_amenities', JSON.stringify(arr));
+        }
+        return arr;
+      });
       setPricings(priceRes || []);
       setBookings(booksRes || []);
       setInspections(inspectRes || []);
@@ -688,7 +860,14 @@ export function AdminVenues() {
 
       try {
         const deps = await api.getResourceDependencies();
-        setDependenciesList(deps || []);
+        const mappedDeps = (deps || []).map((d: any) => ({
+          ...d,
+          parent_id: d.resource,
+          required_id: d.requires,
+          parent_resource_name: parsedResources.find((r:any) => r.id === d.resource)?.name,
+          required_resource_name: parsedResources.find((r:any) => r.id === d.requires)?.name,
+        }));
+        setDependenciesList(mappedDeps);
       } catch (e) {
         console.log("No resource dependencies endpoint available yet", e);
       }
@@ -706,11 +885,11 @@ export function AdminVenues() {
   const handlePublishProperty = async () => {
     try {
       if (selectedPropertyForWizard) {
-        const updated = await api.updateBookingProperty(selectedPropertyForWizard.id, buildPropertyPayload());
+        const updated = await api.updateBookingProperty(selectedPropertyForWizard.id, buildPropertyPayload(true));
         setSelectedPropertyForWizard(updated);
         toast.success(isSuperAdmin ? "Property published and approved!" : "Property updated and sent for Super Admin approval!");
       } else {
-        const created = await api.createBookingProperty(buildPropertyPayload());
+        const created = await api.createBookingProperty(buildPropertyPayload(true));
         setSelectedPropertyForWizard(created);
         toast.success(isSuperAdmin ? "Property published and approved!" : "Property created and sent for Super Admin approval!");
       }
@@ -725,13 +904,13 @@ export function AdminVenues() {
     if (workflowStep === 1) {
       try {
         if (selectedPropertyForWizard) {
-          const updated = await api.updateBookingProperty(selectedPropertyForWizard.id, buildPropertyPayload());
+          const updated = await api.updateBookingProperty(selectedPropertyForWizard.id, buildPropertyPayload(false));
           setSelectedPropertyForWizard(updated);
-          toast.success(isSuperAdmin ? "Property general info updated" : "Property updated and sent for approval");
+          toast.success("Property general details updated.");
         } else {
-          const created = await api.createBookingProperty(buildPropertyPayload());
+          const created = await api.createBookingProperty(buildPropertyPayload(false));
           setSelectedPropertyForWizard(created);
-          toast.success(isSuperAdmin ? "Property created and approved." : "Property created and sent for Super Admin approval.");
+          toast.success(isSuperAdmin ? "Property draft created." : "Property draft created. Please complete the remaining steps to submit for approval.");
         }
         setWorkflowStep(2);
       } catch (error: any) {
@@ -798,10 +977,10 @@ export function AdminVenues() {
   };
 
   const toggleAmenity = (amenityId: string) => {
-    setPropertyForm(prev => ({
+    setPropertyForm((prev: any) => ({
       ...prev,
       amenities: prev.amenities.includes(amenityId)
-        ? prev.amenities.filter(id => id !== amenityId)
+        ? prev.amenities.filter((id: string) => id !== amenityId)
         : [...prev.amenities, amenityId]
     }));
   };
@@ -813,7 +992,7 @@ export function AdminVenues() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files);
-      setPropertyForm(prev => ({
+      setPropertyForm((prev: any) => ({
         ...prev,
         uploaded_photos: [...prev.uploaded_photos, ...filesArray]
       }));
@@ -822,16 +1001,16 @@ export function AdminVenues() {
   };
 
   const removeUploadedPhoto = (index: number) => {
-    setPropertyForm(prev => ({
+    setPropertyForm((prev: any) => ({
       ...prev,
-      uploaded_photos: prev.uploaded_photos.filter((_, i) => i !== index)
+      uploaded_photos: prev.uploaded_photos.filter((_: any, i: number) => i !== index)
     }));
   };
 
   const removeExistingPhoto = (photoPath: string) => {
-    setPropertyForm(prev => ({
+    setPropertyForm((prev: any) => ({
       ...prev,
-      photos: prev.photos.filter(p => p !== photoPath)
+      photos: prev.photos.filter((p: any) => p !== photoPath)
     }));
   };
 
@@ -993,15 +1172,19 @@ export function AdminVenues() {
               </div>
               <div className="space-y-2">
                 <Label className="text-xs font-semibold">Status</Label>
-                <select 
-                  className="flex h-10 w-full rounded-xl border border-border/70 bg-card px-3 py-2 text-xs font-semibold outline-none text-warm-muted focus:border-primary" 
-                  value={propertyForm.status} 
-                  onChange={e => setPropertyForm({ ...propertyForm, status: e.target.value })}
-                >
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="Pending Approval">Pending Approval</option>
-                </select>
+                <div className="flex items-center h-10 px-4 rounded-xl border border-border/40 bg-sand/10 text-xs font-bold text-foreground">
+                  <span className={`w-2 h-2 rounded-full mr-2 shrink-0 ${
+                    propertyForm.status === 'Approved' || propertyForm.status === 'Active'
+                      ? 'bg-green-500'
+                      : propertyForm.status === 'Pending Approval'
+                        ? 'bg-amber-500'
+                        : propertyForm.status === 'Draft'
+                          ? 'bg-gray-400'
+                          : 'bg-red-500'
+                  }`} />
+                  {propertyForm.status || 'Draft'}
+                  <span className="text-[10px] text-warm-muted font-normal ml-auto italic">(Managed automatically)</span>
+                </div>
               </div>
             </div>
 
@@ -1125,7 +1308,7 @@ export function AdminVenues() {
               {(propertyForm.photos.length > 0 || propertyForm.uploaded_photos.length > 0) && (
                 <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                   {/* Existing DB Photos */}
-                  {propertyForm.photos.map((photo, i) => (
+                  {propertyForm.photos.map((photo: string, i: number) => (
                     <div key={`exist-${i}`} className="aspect-square rounded-xl overflow-hidden border border-border/30 relative group bg-sand/20">
                       <img src={getImageUrl(photo)} alt="" className="w-full h-full object-cover" />
                       <button 
@@ -1138,7 +1321,7 @@ export function AdminVenues() {
                     </div>
                   ))}
                   {/* Newly Uploaded Files */}
-                  {propertyForm.uploaded_photos.map((file, i) => {
+                  {propertyForm.uploaded_photos.map((file: File, i: number) => {
                     const localUrl = URL.createObjectURL(file);
                     return (
                       <div key={`new-${i}`} className="aspect-square rounded-xl overflow-hidden border border-border/30 relative group bg-sand/20">
@@ -1310,14 +1493,16 @@ export function AdminVenues() {
         className="w-full space-y-6"
       >
         <Card className="border border-border/40 shadow-sm rounded-3xl bg-card overflow-hidden">
-          <CardHeader className="bg-sand/10 border-b border-border/30 pb-5">
+          <CardHeader className="bg-gradient-to-r from-primary/8 to-primary/3 border-b border-border/30 pb-5">
             <div className="flex justify-between items-center">
               <div>
-                <span className="text-xs bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">Step 2 of 12</span>
-                <CardTitle className="text-xl font-black mt-2 text-foreground uppercase tracking-tight">Resource Management Studio</CardTitle>
-                <CardDescription className="text-xs text-warm-muted mt-0.5">Generate single or bulk resources (rooms, halls, gardens) for <b>{selectedPropertyForWizard?.name || "the Property"}</b>.</CardDescription>
+                <span className="text-[10px] bg-primary text-white font-bold uppercase tracking-widest px-2.5 py-1 rounded-lg shadow-sm">Step 2 of 12</span>
+                <CardTitle className="text-2xl font-black mt-2.5 text-foreground tracking-tight">Resource Studio</CardTitle>
+                <CardDescription className="text-xs text-warm-muted mt-1">Add rooms, halls, or spaces to <b className="text-foreground">{selectedPropertyForWizard?.name || "the Property"}</b></CardDescription>
               </div>
-              <Sparkles className="h-6 w-6 text-primary animate-pulse" />
+              <div className="h-11 w-11 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center shadow-sm">
+                <Sparkles className="h-5 w-5 text-primary" />
+              </div>
             </div>
           </CardHeader>
           <CardContent className="pt-6 space-y-6 text-xs font-semibold">
@@ -1333,23 +1518,22 @@ export function AdminVenues() {
             {/* Toggle Creation Type */}
             <div className="space-y-4">
               <Label className="text-xs font-bold text-foreground">Studio Generation Mode</Label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-4">
                 {[
-                  { id: 'single', label: 'Single Unit', desc: 'Create one hall or kitchen' },
-                  { id: 'bulk', label: 'Bulk Duplicate', desc: 'Create multiple identical rooms' },
-                  { id: 'range', label: 'Room Range Generator', desc: 'Generate 200+ rooms (e.g. 101-150)' }
+                  { id: 'single', label: 'Single Unit', desc: 'Create one hall, kitchen or specific resource' },
+                  { id: 'range', label: 'Add Bulk Resources', desc: 'Generate multiple resources (e.g. Rooms 101-150)' }
                 ].map(mode => (
                   <button
                     key={mode.id}
                     type="button"
                     onClick={() => setResourceAddMode(mode.id as any)}
-                    className={`p-3.5 rounded-2xl border text-left flex flex-col gap-1 transition-all ${
+                    className={`p-4 rounded-2xl border text-left flex flex-col gap-1.5 transition-all ${
                       resourceAddMode === mode.id 
-                        ? 'border-primary bg-primary/5 text-primary shadow-sm' 
+                        ? 'border-primary bg-primary/5 text-primary shadow-sm ring-2 ring-primary/15' 
                         : 'border-border/60 hover:bg-sand/20 text-warm-muted'
                     }`}
                   >
-                    <span className="font-bold text-foreground">{mode.label}</span>
+                    <span className="font-bold text-sm text-foreground">{mode.label}</span>
                     <span className="text-xs font-medium leading-normal">{mode.desc}</span>
                   </button>
                 ))}
@@ -1359,20 +1543,20 @@ export function AdminVenues() {
             {/* Generation details form based on selected mode */}
             {resourceAddMode === 'range' ? (
               <div className="space-y-5 p-5 border border-border/40 rounded-2xl bg-sand/5">
-                <h4 className="font-bold text-foreground text-xs uppercase tracking-wider border-b pb-2">Room Range Generator Setup</h4>
+                <h4 className="font-bold text-foreground text-xs uppercase tracking-wider border-b pb-2">Add Bulk Resources (Room Range Generator)</h4>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Resource / Base Name *</Label>
+                    <Label className="text-xs font-semibold">Base Resource Name *</Label>
                     <Input 
                       value={roomRangeForm.resource_name} 
                       onChange={e => setRoomRangeForm({ ...roomRangeForm, resource_name: e.target.value })} 
-                      placeholder="e.g. Delux AC Room"
+                      placeholder="e.g. Standard Guest Room"
                       className="rounded-xl border-border/70 h-10" 
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Prefix Prefix</Label>
+                    <Label className="text-xs font-semibold">Resource Prefix</Label>
                     <Input 
                       value={roomRangeForm.prefix} 
                       onChange={e => setRoomRangeForm({ ...roomRangeForm, prefix: e.target.value })} 
@@ -1399,7 +1583,7 @@ export function AdminVenues() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Digits Padding</Label>
+                    <Label className="text-xs font-semibold">Digits Padding (Length)</Label>
                     <Input 
                       type="number" 
                       value={roomRangeForm.digits} 
@@ -1407,37 +1591,106 @@ export function AdminVenues() {
                       className="rounded-xl border-border/70 h-10 font-mono" 
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold">Capacity (People) *</Label>
+                    <Input 
+                      type="number" 
+                      value={roomRangeForm.capacity} 
+                      onChange={e => setRoomRangeForm({ ...roomRangeForm, capacity: parseInt(e.target.value) || 4 })} 
+                      className="rounded-xl border-border/70 h-10 font-mono" 
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs font-semibold">Hourly Rate (₹) *</Label>
+                    <Input 
+                      type="number" 
+                      value={roomRangeForm.hourly_rate} 
+                      onChange={e => setRoomRangeForm({ ...roomRangeForm, hourly_rate: parseFloat(e.target.value) || 0 })} 
+                      placeholder="e.g. 100" 
+                      className="rounded-xl border-border/70 h-10 font-mono" 
+                    />
+                  </div>
+
+                  {/* Half-Day Rate (Hours & Price) */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Half-Day Hours</Label>
+                      <Input 
+                        type="number" 
+                        value={roomRangeForm.half_day_hours} 
+                        onChange={e => setRoomRangeForm({ ...roomRangeForm, half_day_hours: parseInt(e.target.value) || 6 })} 
+                        className="rounded-xl border-border/70 h-10 font-mono" 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Half-Day Price (₹)</Label>
+                      <Input 
+                        type="number" 
+                        value={roomRangeForm.half_day_rate} 
+                        onChange={e => setRoomRangeForm({ ...roomRangeForm, half_day_rate: parseFloat(e.target.value) || 0 })} 
+                        placeholder="e.g. 500" 
+                        className="rounded-xl border-border/70 h-10 font-mono" 
+                      />
+                    </div>
+                  </div>
+
+                  {/* Full-Day Rate (Static Hours & Price) */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Full-Day Hours</Label>
+                      <Input 
+                        value="24 Hours" 
+                        disabled 
+                        className="rounded-xl border-border/70 h-10 font-mono bg-sand/20 cursor-not-allowed" 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Full-Day Price (₹) *</Label>
+                      <Input 
+                        type="number" 
+                        value={roomRangeForm.full_day_rate} 
+                        onChange={e => setRoomRangeForm({ ...roomRangeForm, full_day_rate: parseFloat(e.target.value) || 0 })} 
+                        placeholder="e.g. 1000" 
+                        className="rounded-xl border-border/70 h-10 font-mono" 
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2 flex flex-col justify-end">
                     <div className="p-3 bg-primary/5 rounded-xl border border-primary/15 text-center">
-                      <span className="text-xs text-warm-muted uppercase tracking-wider block font-bold">Total Rooms Generated</span>
-                      <span className="text-xl font-bold text-primary font-mono mt-0.5">
-                        {Math.max(0, roomRangeForm.end_num - roomRangeForm.start_num + 1)} Rooms
+                      <span className="text-[10px] text-warm-muted uppercase tracking-wider block font-bold">Total Resources to Generate</span>
+                      <span className="text-xl font-black text-primary font-mono mt-0.5">
+                        {Math.max(0, roomRangeForm.end_num - roomRangeForm.start_num + 1)} Units
                       </span>
                     </div>
                   </div>
                 </div>
 
                 {/* Amenity Picker in range builder */}
-                <div className="space-y-2">
-                  <Label className="text-xs font-semibold">Pre-assign Amenities</Label>
+                <div className="space-y-3 pt-3 border-t border-border/30">
+                  <Label className="text-xs font-bold text-foreground flex items-center justify-between">
+                    <span>Pre-assigned Amenities</span>
+                    <span className="text-[10px] text-warm-muted font-normal">Click to toggle selection</span>
+                  </Label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {['AC', 'WiFi', 'Attached Bathroom', 'TV', 'Parking', 'Stage', 'Sound System'].map(amenity => {
+                    {customAmenities.map(amenity => {
                       const isSelected = roomRangeForm.amenities.includes(amenity);
                       return (
                         <button
                           key={amenity}
                           type="button"
                           onClick={() => {
-                            setRoomRangeForm(prev => ({
+                            setRoomRangeForm((prev: any) => ({
                               ...prev,
                               amenities: isSelected 
-                                ? prev.amenities.filter(a => a !== amenity) 
+                                ? prev.amenities.filter((a: string) => a !== amenity) 
                                 : [...prev.amenities, amenity]
                             }));
                           }}
                           className={`flex items-center gap-2 border p-2.5 rounded-xl transition cursor-pointer text-left ${
                             isSelected 
-                              ? 'border-primary bg-primary/5 text-primary' 
+                              ? 'border-primary bg-primary/5 text-primary shadow-sm' 
                               : 'border-border/60 hover:bg-sand/30 text-warm-muted'
                           }`}
                         >
@@ -1451,65 +1704,143 @@ export function AdminVenues() {
                       );
                     })}
                   </div>
+                  {/* Dynamic Amenities creator mini-form */}
+                  <div className="flex gap-2 max-w-md mt-2">
+                    <Input 
+                      placeholder="Add custom amenity label..." 
+                      value={newAmenityInput} 
+                      onChange={e => setNewAmenityInput(e.target.value)} 
+                      className="rounded-xl border-border/70 h-9 text-xs" 
+                    />
+                    <Button 
+                      type="button" 
+                      onClick={() => handleAddCustomAmenityForRange(newAmenityInput)}
+                      className="h-9 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs animate-fade-in"
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Add
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : (
-              <div className="space-y-5 p-5 border border-border/40 rounded-2xl bg-sand/5">
-                <h4 className="font-bold text-foreground text-xs uppercase tracking-wider border-b pb-2">Resource Details</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Resource Name *</Label>
-                    <Input value={resourceForm.name} onChange={e => setResourceForm({ ...resourceForm, name: e.target.value })} placeholder="e.g. Banquet Hall A" className="rounded-xl border-border/70 h-10" />
+              <div className="space-y-6 p-5 border border-border/30 rounded-2xl bg-gradient-to-b from-sand/10 to-transparent">
+                <div className="flex items-center gap-2 border-b border-border/20 pb-3">
+                  <div className="h-6 w-6 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <Building2 className="h-3.5 w-3.5 text-primary" />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Resource Type *</Label>
-                    <select className="flex h-10 w-full rounded-xl border border-border/70 bg-card px-3 py-2 text-xs font-semibold outline-none text-warm-muted focus:border-primary" value={resourceForm.resource_type} onChange={e => setResourceForm({ ...resourceForm, resource_type: e.target.value })}>
+                  <h4 className="font-black text-sm text-foreground tracking-tight">Single Resource Details</h4>
+                </div>
+
+                {/* Row 1: Name + Type */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-warm-muted">Resource Name <span className="text-red-500">*</span></Label>
+                    <Input value={resourceForm.name} onChange={e => setResourceForm({ ...resourceForm, name: e.target.value })} placeholder="e.g. Banquet Hall A" className="rounded-xl border-border/60 h-10 font-semibold bg-card focus:border-primary transition-colors" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-warm-muted">Resource Type <span className="text-red-500">*</span></Label>
+                    <select className="flex h-10 w-full rounded-xl border border-border/60 bg-card px-3 py-2 text-xs font-semibold outline-none text-foreground focus:border-primary transition-colors" value={resourceForm.resource_type} onChange={e => setResourceForm({ ...resourceForm, resource_type: e.target.value })}>
                       {RESOURCE_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Capacity (People)</Label>
-                    <Input type="number" value={resourceForm.capacity} onChange={e => setResourceForm({ ...resourceForm, capacity: parseInt(e.target.value) || 0 })} className="rounded-xl border-border/70 h-10 font-mono" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Booking Type</Label>
-                    <select className="flex h-10 w-full rounded-xl border border-border/70 bg-card px-3 py-2 text-xs font-semibold outline-none text-warm-muted focus:border-primary" value={resourceForm.booking_type} onChange={e => setResourceForm({ ...resourceForm, booking_type: e.target.value })}>
-                      <option value="Hourly">Hourly</option>
-                      <option value="Half Day">Half Day</option>
-                      <option value="Full Day">Full Day</option>
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Hourly Rate (₹)</Label>
-                    <Input type="number" value={resourceForm.hourly_rate} onChange={e => setResourceForm({ ...resourceForm, hourly_rate: parseFloat(e.target.value) || 0 })} placeholder="e.g. 500" className="rounded-xl border-border/70 h-10 font-mono" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Half Day Rate (₹)</Label>
-                    <Input type="number" value={resourceForm.half_day_rate} onChange={e => setResourceForm({ ...resourceForm, half_day_rate: parseFloat(e.target.value) || 0 })} placeholder="e.g. 3000" className="rounded-xl border-border/70 h-10 font-mono" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold">Full Day Rate (₹)</Label>
-                    <Input type="number" value={resourceForm.full_day_rate} onChange={e => setResourceForm({ ...resourceForm, full_day_rate: parseFloat(e.target.value) || 0 })} placeholder="e.g. 5000" className="rounded-xl border-border/70 h-10 font-mono" />
-                  </div>
-                  {resourceAddMode === 'bulk' && (
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold">Number of Duplicates</Label>
-                      <Input type="number" value={resourceForm.range_end} onChange={e => setResourceForm({ ...resourceForm, range_end: parseInt(e.target.value) || 1 })} className="rounded-xl border-border/70 h-10 font-mono" />
-                    </div>
-                  )}
                 </div>
+
+                {/* Capacity */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-warm-muted">Capacity (People)</Label>
+                    <Input type="number" value={resourceForm.capacity || ''} placeholder="e.g. 200" onChange={e => setResourceForm({ ...resourceForm, capacity: parseInt(e.target.value) || 0 })} className="rounded-xl border-border/60 h-10 font-mono bg-card focus:border-primary transition-colors" />
+                  </div>
+                </div>
+
+                {/* Pricing Cards */}
                 <div className="space-y-2">
-                  <Label className="text-xs font-semibold">Pre-assign Amenities</Label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {['AC','WiFi','Attached Bathroom','TV','Parking','Stage','Sound System','Kitchen'].map(amenity => {
-                      const sel = (resourceForm as any).amenities?.includes(amenity);
-                      return (
-                        <button key={amenity} type="button" onClick={() => setResourceForm(prev => ({ ...prev, amenities: sel ? (prev as any).amenities.filter((a:string)=>a!==amenity) : [...((prev as any).amenities||[]),amenity] }))} className={`flex items-center gap-2 border p-2 rounded-xl text-left transition cursor-pointer text-xs font-semibold ${sel?'border-primary bg-primary/5 text-primary':'border-border/60 hover:bg-sand/30 text-warm-muted'}`}>
-                          <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${sel?'bg-primary border-primary text-white':'border-border/70'}`}>{sel&&<Check className="h-3 w-3"/>}</div>
-                          {amenity}
-                        </button>
-                      );
-                    })}
+                  <Label className="text-[10px] font-bold uppercase tracking-wider text-warm-muted">Pricing Configuration</Label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+
+                    {/* Hourly */}
+                    <div className="p-4 rounded-2xl border border-border/40 bg-card hover:border-primary/40 transition-colors space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center">
+                          <span className="text-[10px] font-black text-blue-600">1H</span>
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Hourly Rate</span>
+                      </div>
+                      <Input type="number" value={resourceForm.hourly_rate || ''} placeholder="₹0" onChange={e => setResourceForm({ ...resourceForm, hourly_rate: parseFloat(e.target.value) || 0 })} className="rounded-xl border-border/50 h-9 font-mono text-sm focus:border-blue-400" />
+                      <p className="text-[10px] text-warm-muted">Price per hour</p>
+                    </div>
+
+                    {/* Half-Day */}
+                    <div className="p-4 rounded-2xl border border-border/40 bg-card hover:border-primary/40 transition-colors space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center">
+                          <span className="text-[10px] font-black text-amber-600">½D</span>
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Half-Day Rate</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <div>
+                          <p className="text-[9px] text-warm-muted mb-1 font-semibold">Hours</p>
+                          <Input type="number" value={resourceForm.half_day_hours || ''} placeholder="6" onChange={e => setResourceForm({ ...resourceForm, half_day_hours: parseInt(e.target.value) || 6 })} className="rounded-xl border-border/50 h-8 font-mono text-xs focus:border-amber-400" />
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-warm-muted mb-1 font-semibold">Price (₹)</p>
+                          <Input type="number" value={resourceForm.half_day_rate || ''} placeholder="₹0" onChange={e => setResourceForm({ ...resourceForm, half_day_rate: parseFloat(e.target.value) || 0 })} className="rounded-xl border-border/50 h-8 font-mono text-xs focus:border-amber-400" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Full-Day */}
+                    <div className="p-4 rounded-2xl border border-border/40 bg-card hover:border-primary/40 transition-colors space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-xl bg-green-50 border border-green-100 flex items-center justify-center">
+                          <span className="text-[10px] font-black text-green-600">24H</span>
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Full-Day Rate</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <div>
+                          <p className="text-[9px] text-warm-muted mb-1 font-semibold">Hours</p>
+                          <Input value="24" disabled className="rounded-xl border-border/50 h-8 font-mono text-xs bg-sand/20 cursor-not-allowed" />
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-warm-muted mb-1 font-semibold">Price (₹)</p>
+                          <Input type="number" value={resourceForm.full_day_rate || ''} placeholder="₹0" onChange={e => setResourceForm({ ...resourceForm, full_day_rate: parseFloat(e.target.value) || 0 })} className="rounded-xl border-border/50 h-8 font-mono text-xs focus:border-green-400" />
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Amenities */}
+                <div className="space-y-3 pt-1 border-t border-border/20">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-bold uppercase tracking-wider text-warm-muted">Amenities</Label>
+                    {(resourceForm as any).amenities?.length > 0 && (
+                      <span className="text-[10px] bg-primary/10 text-primary font-bold px-2 py-0.5 rounded-lg">{(resourceForm as any).amenities.length} selected</span>
+                    )}
+                  </div>
+                  {customAmenities.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {customAmenities.map(amenity => {
+                        const sel = (resourceForm as any).amenities?.includes(amenity);
+                        return (
+                          <button key={amenity} type="button" onClick={() => setResourceForm((prev: any) => ({ ...prev, amenities: sel ? (prev as any).amenities.filter((a:string)=>a!==amenity) : [...((prev as any).amenities||[]),amenity] }))} className={`flex items-center gap-2 border px-3 py-2.5 rounded-xl text-left transition-all cursor-pointer text-xs font-semibold ${sel?'border-primary bg-primary/5 text-primary shadow-sm':'border-border/50 hover:border-border hover:bg-sand/20 text-warm-muted'}`}>
+                            <div className={`h-4 w-4 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${sel?'bg-primary border-primary text-white':'border-border/60'}`}>{sel&&<Check className="h-2.5 w-2.5"/>}</div>
+                            <span className="truncate">{amenity}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-warm-muted italic">No amenities yet. Add one below.</p>
+                  )}
+                  <div className="flex gap-2 max-w-sm">
+                    <Input placeholder="e.g. Projector, CCTV..." value={newAmenityInput} onChange={e => setNewAmenityInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { handleAddCustomAmenityForSingle(newAmenityInput); } }} className="rounded-xl border-border/60 h-9 text-xs flex-1" />
+                    <Button type="button" onClick={() => handleAddCustomAmenityForSingle(newAmenityInput)} className="h-9 rounded-xl bg-foreground hover:bg-foreground/85 text-background font-bold text-xs px-4">
+                      <Plus className="h-3.5 w-3.5 mr-1" /> Add
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1527,67 +1858,99 @@ export function AdminVenues() {
                 }
                 try {
                   if (resourceAddMode === 'range') {
-                    const count = Math.max(0, roomRangeForm.end_num - roomRangeForm.start_num + 1);
-                    const newResources = Array.from({ length: count }).map((_, index) => {
-                      const num = roomRangeForm.start_num + index;
-                      const paddedNum = String(num).padStart(roomRangeForm.digits, "0");
-                      const generatedName = `${roomRangeForm.prefix} ${paddedNum}`.trim();
+                    const startNum = parseInt(String(roomRangeForm.start_num), 10);
+                    const endNum = parseInt(String(roomRangeForm.end_num), 10);
+                    const count = Math.max(0, endNum - startNum + 1);
+                    if (count === 0) { toast.error("End number must be greater than or equal to start number."); return; }
+
+                    // Build list of expected names
+                    const generatedItems = Array.from({ length: count }).map((_, index) => {
+                      const num = startNum + index;
+                      const paddedNum = String(num).padStart(parseInt(String(roomRangeForm.digits), 10) || 1, "0");
+                      const name = `${roomRangeForm.prefix} ${paddedNum}`.trim();
                       return {
-                        property: selectedPropertyForWizard.id,
-                        name: generatedName,
-                        resource_type: (roomRangeForm as any).resource_type || "Room",
-                        capacity: (roomRangeForm as any).capacity || 4,
-                        booking_type: (roomRangeForm as any).booking_type || "Full Day",
-                        hourly_rate: (roomRangeForm as any).hourly_rate || 0,
-                        half_day_rate: (roomRangeForm as any).half_day_rate || 0,
-                        full_day_rate: (roomRangeForm as any).full_day_rate || 0,
-                        status: "Active",
-                        amenities: roomRangeForm.amenities
+                        name,
+                        data: {
+                          property: selectedPropertyForWizard.id,
+                          name,
+                          resource_type: roomRangeForm.resource_type || "Room",
+                          capacity: parseInt(String(roomRangeForm.capacity), 10) || 0,
+                          booking_type: "Full Day",
+                          hourly_rate: parseFloat(String(roomRangeForm.hourly_rate)) || 0,
+                          half_day_hours: (roomRangeForm.half_day_hours != null && roomRangeForm.half_day_hours !== '' ? parseInt(String(roomRangeForm.half_day_hours), 10) : 6),
+                          half_day_rate: parseFloat(String(roomRangeForm.half_day_rate)) || 0,
+                          full_day_rate: parseFloat(String(roomRangeForm.full_day_rate)) || 0,
+                          status: "Active",
+                          amenities: roomRangeForm.amenities || []
+                        }
                       };
                     });
-                    await api.bulkCreatePropertyResources({ resources: newResources });
-                    toast.success(`${count} rooms generated successfully.`);
-                  } else if (resourceAddMode === 'bulk') {
-                    const count = resourceForm.range_end;
-                    const duplicates = Array.from({ length: count }).map((_, index) => ({
-                      property: selectedPropertyForWizard.id,
-                      name: `${resourceForm.name} ${index + 1}`,
-                      resource_type: resourceForm.resource_type,
-                      capacity: resourceForm.capacity,
-                      booking_type: resourceForm.booking_type,
-                      hourly_rate: resourceForm.hourly_rate || 0,
-                      half_day_rate: resourceForm.half_day_rate || 0,
-                      full_day_rate: resourceForm.full_day_rate || 0,
-                      status: resourceForm.status,
-                      amenities: (resourceForm as any).amenities || []
-                    }));
-                    await api.bulkCreatePropertyResources({ resources: duplicates });
-                    toast.success(`Duplicated ${count} resources successfully.`);
+
+                    // Upsert: find existing resources with same names for this property
+                    const propResources = resources.filter((r: any) => String(r.property) === String(selectedPropertyForWizard.id));
+                    const existingByName = new Map(propResources.map((r: any) => [r.name, r]));
+
+                    const toCreate = generatedItems.filter(item => !existingByName.has(item.name));
+                    const toUpdate = generatedItems.filter(item => existingByName.has(item.name));
+
+                    let createdCount = 0, updatedCount = 0;
+                    if (toCreate.length > 0) {
+                      await api.bulkCreatePropertyResources({ resources: toCreate.map(i => i.data) });
+                      createdCount = toCreate.length;
+                    }
+                    for (const item of toUpdate) {
+                      const existing = existingByName.get(item.name);
+                      await api.updatePropertyResource(existing.id, { ...item.data, property: existing.property });
+                      updatedCount++;
+                    }
+                    toast.success(`Done: ${createdCount} created, ${updatedCount} updated. (${count} total for range ${startNum}–${endNum})`);
                   } else {
                     await api.createPropertyResource({
                       property: selectedPropertyForWizard.id,
                       name: resourceForm.name,
                       resource_type: resourceForm.resource_type,
                       capacity: resourceForm.capacity,
-                      booking_type: resourceForm.booking_type,
+                      booking_type: "Full Day",
                       hourly_rate: resourceForm.hourly_rate || 0,
+                      half_day_hours: (resourceForm.half_day_hours != null && resourceForm.half_day_hours !== '' ? resourceForm.half_day_hours : 6),
                       half_day_rate: resourceForm.half_day_rate || 0,
                       full_day_rate: resourceForm.full_day_rate || 0,
                       status: resourceForm.status,
                       amenities: (resourceForm as any).amenities || []
                     });
-                    toast.success("Single resource created successfully");
+                    toast.success(`"${resourceForm.name}" saved! Fields cleared for next resource.`);
                   }
+                  // ✅ Reset both forms to blank defaults
+                  setResourceForm({
+                    name: "", resource_type: "Hall", capacity: 0, description: "",
+                    booking_type: "Full Day", status: "Active",
+                    hourly_rate: 0, half_day_hours: 6, half_day_rate: 0, full_day_rate: 0, security_deposit: 0,
+                    min_booking_duration_hours: 1, max_booking_duration_hours: 24,
+                    setup_buffer_hours: 0, cleanup_buffer_hours: 0,
+                    isBulk: false, prefix: "Room", range_start: 1, range_end: 10,
+                    dependencies: [] as number[], amenities: [] as string[]
+                  } as any);
+                  setRoomRangeForm({
+                    resource_name: "", prefix: "Room",
+                    start_num: 1, end_num: 10, digits: 2,
+                    amenities: [] as string[], resource_type: "Room",
+                    capacity: 0, hourly_rate: 0, half_day_hours: 6, half_day_rate: 0, full_day_rate: 0
+                  });
                   fetchData();
-                  handleNextStep();
                 } catch (error: any) {
                   console.error("Error creating resources:", error);
                   toast.error(error.message || "Failed to create resources");
                 }
               }}
-              className="bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs px-5 shadow-sm"
+              className="bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs px-5 shadow-sm flex items-center gap-1.5"
             >
-              Generate Resources & Next
+              <Plus className="h-3.5 w-3.5" /> Save & Add Another
+            </Button>
+            <Button
+              onClick={handleNextStep}
+              className="bg-foreground hover:bg-foreground/85 text-background rounded-xl font-bold text-xs px-5 shadow-sm"
+            >
+              Next Step →
             </Button>
           </CardFooter>
         </Card>
@@ -1611,7 +1974,7 @@ export function AdminVenues() {
           <CardHeader className="bg-sand/10 border-b border-border/30 pb-5">
             <div className="flex justify-between items-center">
               <div>
-                <span className="text-xs bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">Step 3 of 7</span>
+                <span className="text-xs bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">Step 3 of 12</span>
                 <CardTitle className="text-xl font-black mt-2 text-foreground uppercase tracking-tight">Active Resource Inventory</CardTitle>
                 <CardDescription className="text-xs text-warm-muted mt-0.5">Manage details and status of resource units allocated to your property.</CardDescription>
               </div>
@@ -1631,10 +1994,55 @@ export function AdminVenues() {
                 <option value="Kitchen">Kitchens Only</option>
               </select>
             </div>
+            {/* Bulk action bar */}
+            {selectedResourceIds.size > 0 && (
+              <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-2xl px-4 py-2.5">
+                <span className="text-xs font-bold text-red-700">{selectedResourceIds.size} resource(s) selected</span>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={() => setSelectedResourceIds(new Set())} className="h-8 text-xs font-semibold rounded-xl text-warm-muted">
+                    Clear selection
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      if (!confirm(`Delete ${selectedResourceIds.size} resource(s)? This cannot be undone.`)) return;
+                      try {
+                        await Promise.all(Array.from(selectedResourceIds).map(id => api.deletePropertyResource(id)));
+                        toast.success(`${selectedResourceIds.size} resource(s) deleted.`);
+                        setSelectedResourceIds(new Set());
+                        fetchData();
+                      } catch (e: any) {
+                        toast.error(e.message || "Failed to delete resources");
+                      }
+                    }}
+                    className="h-8 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl px-4 flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Selected
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="border border-border/40 rounded-2xl overflow-auto bg-card">
               <table className="w-full text-left border-collapse min-w-[700px]">
                 <thead>
                   <tr className="bg-sand/15 border-b border-border/30 text-warm-muted text-xs uppercase tracking-wider font-bold">
+                    <th className="px-4 py-3.5 w-10">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-border/60 accent-primary cursor-pointer"
+                        checked={pageItems.length > 0 && pageItems.every((r: any) => selectedResourceIds.has(r.id))}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setSelectedResourceIds(prev => new Set([...prev, ...pageItems.map((r: any) => r.id)]));
+                          } else {
+                            setSelectedResourceIds(prev => {
+                              const next = new Set(prev);
+                              pageItems.forEach((r: any) => next.delete(r.id));
+                              return next;
+                            });
+                          }
+                        }}
+                      />
+                    </th>
                     <th className="px-4 py-3.5">Resource</th>
                     <th className="px-4 py-3.5">Type</th>
                     <th className="px-4 py-3.5">Capacity</th>
@@ -1645,13 +2053,27 @@ export function AdminVenues() {
                 </thead>
                 <tbody className="divide-y divide-border/20">
                   {pageItems.length === 0 ? (
-                    <tr><td colSpan={6} className="text-center py-12 text-warm-muted text-xs font-medium">No resources found. Go back to Step 2 to generate some.</td></tr>
+                    <tr><td colSpan={7} className="text-center py-12 text-warm-muted text-xs font-medium">No resources found. Go back to Step 2 to generate some.</td></tr>
                   ) : (
                     pageItems.map((r:any) => (
-                      <tr key={r.id} className="hover:bg-sand/5 transition">
+                      <tr key={r.id} className={`hover:bg-sand/5 transition ${selectedResourceIds.has(r.id) ? 'bg-primary/3' : ''}`}>
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 rounded border-border/60 accent-primary cursor-pointer"
+                            checked={selectedResourceIds.has(r.id)}
+                            onChange={e => {
+                              setSelectedResourceIds(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(r.id); else next.delete(r.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
                         <td className="px-4 py-3 font-bold text-foreground">
                           <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${r.status === 'Active' ? 'bg-green-500' : r.status === 'Maintenance' ? 'bg-amber-500' : 'bg-slate-400'}`} />
                             {r.name}
                           </div>
                         </td>
@@ -1662,8 +2084,8 @@ export function AdminVenues() {
                         <td className="px-4 py-3">
                           <div className="space-y-0.5">
                             {r.hourly_rate > 0 && <div className="text-[10px] text-warm-muted"><span className="font-bold text-foreground">₹{r.hourly_rate}</span>/hr</div>}
-                            {r.half_day_rate > 0 && <div className="text-[10px] text-warm-muted"><span className="font-bold text-foreground">₹{r.half_day_rate}</span>/half</div>}
-                            {r.full_day_rate > 0 && <div className="text-[10px] text-warm-muted"><span className="font-bold text-foreground">₹{r.full_day_rate}</span>/day</div>}
+                            {r.half_day_rate > 0 && <div className="text-[10px] text-warm-muted"><span className="font-bold text-foreground">₹{r.half_day_rate}</span>/{(r.half_day_hours != null && r.half_day_hours !== '' ? r.half_day_hours : 6)}h</div>}
+                            {r.full_day_rate > 0 && <div className="text-[10px] text-warm-muted"><span className="font-bold text-foreground">₹{r.full_day_rate}</span>/24h</div>}
                             {!r.hourly_rate && !r.half_day_rate && !r.full_day_rate && <span className="text-warm-muted">—</span>}
                           </div>
                         </td>
@@ -1671,17 +2093,38 @@ export function AdminVenues() {
                           <div className="flex flex-wrap gap-1">
                             {Array.isArray(r.amenities) && r.amenities.length > 0 ? (
                               <>
-                                {r.amenities.slice(0, 2).map((a:string) => (
+                                {r.amenities.slice(0, 3).map((a:string) => (
                                   <Badge key={a} variant="outline" className="text-[10px] px-1.5 py-0 border-border/40 text-warm-muted">{a}</Badge>
                                 ))}
-                                {r.amenities.length > 2 && <span className="text-[10px] text-primary font-bold">+{r.amenities.length - 2}</span>}
+                                {r.amenities.length > 3 && <span className="text-[10px] text-primary font-bold">+{r.amenities.length - 3}</span>}
                               </>
                             ) : <span className="text-warm-muted">None</span>}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-1.5">
-                            <Button size="icon" variant="ghost" className="h-7 w-7 text-orange-600 rounded-lg"><Edit className="h-3.5 w-3.5" /></Button>
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              className="h-7 w-7 text-orange-600 rounded-lg hover:bg-orange-50/50"
+                              onClick={() => {
+                                setEditingResource(r);
+                                setEditResourceForm({
+                                  name: r.name,
+                                  resource_type: r.resource_type,
+                                  capacity: r.capacity || 0,
+                                  hourly_rate: r.hourly_rate || 0,
+                                  half_day_hours: (r.half_day_hours != null && r.half_day_hours !== '' ? r.half_day_hours : 6),
+                                  half_day_rate: r.half_day_rate || 0,
+                                  full_day_rate: r.full_day_rate || 0,
+                                  status: r.status || "Active",
+                                  booking_type: r.booking_type || "Full Day",
+                                  amenities: Array.isArray(r.amenities) ? [...r.amenities] : []
+                                });
+                              }}
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                            </Button>
                             <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500 rounded-lg hover:bg-red-50" onClick={async () => { try { await api.deletePropertyResource(r.id); toast.success("Resource deleted"); fetchData(); } catch(e:any){toast.error(e.message||"Failed");} }}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
@@ -1705,6 +2148,191 @@ export function AdminVenues() {
                   </Button>
                 </div>
               </div>
+            )}
+
+            {/* Edit Resource Dialog */}
+            {editingResource && (
+              <Dialog open={!!editingResource} onOpenChange={(open) => { if (!open) setEditingResource(null); }}>
+                <DialogContent className="max-w-lg rounded-3xl p-6 border-none bg-card shadow-2xl">
+                  <DialogHeader>
+                    <DialogTitle className="text-lg font-black uppercase tracking-tight">Edit Resource Unit</DialogTitle>
+                    <DialogDescription className="text-xs text-warm-muted">Update details for {editingResource.name}.</DialogDescription>
+                  </DialogHeader>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4 text-xs font-semibold">
+                    <div className="space-y-2">
+                      <Label>Resource Name *</Label>
+                      <Input 
+                        value={editResourceForm.name} 
+                        onChange={e => setEditResourceForm({ ...editResourceForm, name: e.target.value })} 
+                        className="rounded-xl h-10" 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Resource Type *</Label>
+                      <select 
+                        className="flex h-10 w-full rounded-xl border border-border/70 bg-card px-3 py-2 text-xs font-semibold outline-none text-warm-muted focus:border-primary" 
+                        value={editResourceForm.resource_type} 
+                        onChange={e => setEditResourceForm({ ...editResourceForm, resource_type: e.target.value })}
+                      >
+                        {RESOURCE_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Capacity (People)</Label>
+                      <Input 
+                        type="number" 
+                        value={editResourceForm.capacity} 
+                        onChange={e => setEditResourceForm({ ...editResourceForm, capacity: parseInt(e.target.value) || 0 })} 
+                        className="rounded-xl h-10 font-mono" 
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Status</Label>
+                      <div className="flex items-center h-10 px-4 rounded-xl border border-border/40 bg-sand/10 text-xs font-bold text-foreground">
+                        <span className={`w-2 h-2 rounded-full mr-2 shrink-0 ${
+                          editResourceForm.status === 'Active'
+                            ? 'bg-green-500'
+                            : editResourceForm.status === 'Maintenance'
+                              ? 'bg-amber-500'
+                              : 'bg-gray-400'
+                        }`} />
+                        {editResourceForm.status || 'Active'}
+                        <span className="text-[10px] text-warm-muted font-normal ml-auto italic">(Managed automatically)</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Hourly Rate (₹) *</Label>
+                      <Input 
+                        type="number" 
+                        value={editResourceForm.hourly_rate} 
+                        onChange={e => setEditResourceForm({ ...editResourceForm, hourly_rate: parseFloat(e.target.value) || 0 })} 
+                        className="rounded-xl h-10 font-mono" 
+                      />
+                    </div>
+                    {/* Half Day */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Half-Day Hours</Label>
+                        <Input 
+                          type="number" 
+                          value={editResourceForm.half_day_hours} 
+                          onChange={e => setEditResourceForm({ ...editResourceForm, half_day_hours: parseInt(e.target.value) || 6 })} 
+                          className="rounded-xl h-10 font-mono" 
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Half-Day Price (₹)</Label>
+                        <Input 
+                          type="number" 
+                          value={editResourceForm.half_day_rate} 
+                          onChange={e => setEditResourceForm({ ...editResourceForm, half_day_rate: parseFloat(e.target.value) || 0 })} 
+                          className="rounded-xl h-10 font-mono" 
+                        />
+                      </div>
+                    </div>
+                    {/* Full Day */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Full-Day Hours</Label>
+                        <Input 
+                          value="24 Hours" 
+                          disabled 
+                          className="rounded-xl h-10 font-mono bg-sand/20 cursor-not-allowed" 
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Full-Day Price (₹) *</Label>
+                        <Input 
+                          type="number" 
+                          value={editResourceForm.full_day_rate} 
+                          onChange={e => setEditResourceForm({ ...editResourceForm, full_day_rate: parseFloat(e.target.value) || 0 })} 
+                          className="rounded-xl h-10 font-mono" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Amenities in edit mode */}
+                  <div className="space-y-3 pt-3 border-t border-border/30 text-xs font-semibold">
+                    <Label>Pre-assigned Amenities</Label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {customAmenities.map(amenity => {
+                        const sel = editResourceForm.amenities?.includes(amenity);
+                        return (
+                          <button 
+                            key={amenity} 
+                            type="button" 
+                            onClick={() => {
+                              setEditResourceForm((prev: any) => ({
+                                ...prev,
+                                amenities: sel 
+                                  ? prev.amenities.filter((a: string) => a !== amenity) 
+                                  : [...(prev.amenities || []), amenity]
+                              }));
+                            }} 
+                            className={`flex items-center gap-2 border p-2 rounded-xl text-left transition cursor-pointer text-[11px] font-semibold ${sel ? 'border-primary bg-primary/5 text-primary' : 'border-border/60 hover:bg-sand/30 text-warm-muted'}`}
+                          >
+                            <div className={`h-3.5 w-3.5 rounded border flex items-center justify-center shrink-0 ${sel ? 'bg-primary border-primary text-white' : 'border-border/70'}`}>
+                              {sel && <Check className="h-2.5 w-2.5" />}
+                            </div>
+                            {amenity}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-2 max-w-sm mt-1">
+                      <Input 
+                        placeholder="Add custom amenity label..." 
+                        value={newAmenityInput} 
+                        onChange={e => setNewAmenityInput(e.target.value)} 
+                        className="rounded-xl border-border/70 h-8 text-xs" 
+                      />
+                      <Button 
+                        type="button" 
+                        onClick={() => {
+                          const trimmed = newAmenityInput.trim();
+                          if (!trimmed) return;
+                          handleAddCustomAmenity(trimmed);
+                          if (!editResourceForm.amenities?.includes(trimmed)) {
+                            setEditResourceForm((prev: any) => ({
+                              ...prev,
+                              amenities: [...(prev.amenities || []), trimmed]
+                            }));
+                          }
+                          setNewAmenityInput("");
+                        }}
+                        className="h-8 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs"
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+
+                  <DialogFooter className="mt-6 gap-2">
+                    <Button variant="ghost" onClick={() => setEditingResource(null)} className="rounded-xl text-xs font-bold">
+                      Cancel
+                    </Button>
+                    <Button 
+                      onClick={async () => {
+                        try {
+                          await api.updatePropertyResource(editingResource.id, {
+                            ...editResourceForm,
+                            property: editingResource.property
+                          });
+                          toast.success("Resource updated successfully");
+                          setEditingResource(null);
+                          fetchData();
+                        } catch (error: any) {
+                          toast.error(error.message || "Failed to update resource");
+                        }
+                      }}
+                      className="bg-primary hover:bg-primary/95 text-white rounded-xl text-xs font-bold px-5 shadow-sm"
+                    >
+                      Save Changes
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             )}
           </CardContent>
           <CardFooter className="border-t border-border/40 pt-4 flex justify-between bg-sand/5 p-4 rounded-b-2xl">
@@ -1778,14 +2406,29 @@ export function AdminVenues() {
                   try {
                     const parentObj = propResources.find((r:any) => String(r.id) === String(parentResourceDependency));
                     const reqIds = requiredResourceDependency.split(',').filter(Boolean);
-                    const newDeps = reqIds.map(id => {
+                    
+                    const newDeps = await Promise.all(reqIds.map(async id => {
                       const reqObj = propResources.find((r:any) => String(r.id) === id);
-                      return { id: Date.now() + Math.random(), parent: parentObj?.name, required: reqObj?.name, parent_id: parentObj?.id, required_id: reqObj?.id };
-                    });
+                      const res = await api.createResourceDependency({
+                        resource: parentObj?.id,
+                        requires: reqObj?.id,
+                        dependency_type: 'combination'
+                      });
+                      // Map backend response fields to frontend UI expectation
+                      return {
+                        ...res,
+                        parent_resource_name: parentObj?.name,
+                        required_resource_name: reqObj?.name,
+                        parent_id: parentObj?.id,
+                        required_id: reqObj?.id
+                      };
+                    }));
+                    
                     setDependenciesList(prev => [...prev, ...newDeps]);
-                    toast.success(`${newDeps.length} dependency rule(s) created`);
+                    toast.success(`${newDeps.length} dependency rule(s) created and saved`);
                     setParentResourceDependency("");
                     setRequiredResourceDependency("");
+                    fetchData();
                   } catch(e:any) { toast.error("Failed to link dependency rules"); }
                 }} className="bg-primary hover:bg-primary/95 text-white font-bold rounded-xl h-9 px-4 text-xs w-full">
                   Create Links ({requiredResourceDependency.split(',').filter(Boolean).length} selected)
@@ -1809,9 +2452,16 @@ export function AdminVenues() {
                         {idx + 1}. {dep.parent || dep.parent_resource_name} <span className="text-primary px-2 font-bold">→ Requires →</span> {dep.required || dep.required_resource_name}
                       </span>
                       <button 
-                        onClick={() => {
-                          setDependenciesList(prev => prev.filter(item => item.id !== dep.id));
-                          toast.success("Dependency rule unlinked");
+                        onClick={async () => {
+                          try {
+                            if (dep.id) {
+                              await api.deleteResourceDependency(dep.id);
+                            }
+                            setDependenciesList(prev => prev.filter(item => item.id !== dep.id));
+                            toast.success("Dependency rule unlinked and deleted");
+                          } catch (e: any) {
+                            toast.error("Failed to delete dependency rule");
+                          }
                         }}
                         className="text-red-500 hover:text-red-700 h-6 w-6 rounded-lg hover:bg-red-50 flex items-center justify-center transition"
                       >
@@ -1848,13 +2498,15 @@ export function AdminVenues() {
         const newAddon = {
           id: Date.now(),
           name: addonForm.name.trim(),
-          price: parseFloat(addonForm.price) || 0,
           hourly_rate: parseFloat(addonForm.hourly_rate) || 0,
-          daily_rate: parseFloat(addonForm.daily_rate) || 0,
+          half_day_hours: parseInt(addonForm.half_day_hours) || 6,
+          half_day_rate: parseFloat(addonForm.half_day_rate) || 0,
+          full_day_rate: parseFloat(addonForm.full_day_rate) || 0,
+          deposit_amount: parseFloat(addonForm.deposit_amount) || 0,
           property: selectedPropertyForWizard?.id,
         };
         setAddonsList(prev => [...prev, newAddon]);
-        setAddonForm({ name: '', price: '', hourly_rate: '', daily_rate: '' });
+        setAddonForm({ name: '', hourly_rate: '', half_day_hours: '6', half_day_rate: '', full_day_rate: '', deposit_amount: '' });
         toast.success(`Add-on "${newAddon.name}" added successfully!`);
       } catch(e:any) {
         toast.error(e.message || 'Failed to add add-on');
@@ -1869,7 +2521,7 @@ export function AdminVenues() {
           <CardHeader className="bg-sand/10 border-b border-border/30 pb-5">
             <div className="flex justify-between items-center">
               <div>
-                <span className="text-xs bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">Step 5 of 6</span>
+                <span className="text-xs bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">Step 5 of 12</span>
                 <CardTitle className="text-xl font-black mt-2 text-foreground uppercase tracking-tight">Property Add-ons</CardTitle>
                 <CardDescription className="text-xs text-warm-muted mt-0.5">Define optional chargeable add-ons for this property (e.g. Sound System, Projector, Catering).</CardDescription>
               </div>
@@ -1878,28 +2530,48 @@ export function AdminVenues() {
           </CardHeader>
           <CardContent className="pt-6 space-y-6 text-xs font-semibold">
             {/* Add-on Form */}
-            <div className="p-4 border border-border/40 rounded-2xl bg-sand/5 space-y-4">
-              <h4 className="font-bold text-foreground text-xs uppercase tracking-wider">New Add-on</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <div className="space-y-1.5 sm:col-span-2 lg:col-span-1">
+            <div className="p-5 border border-border/40 rounded-2xl bg-sand/5 space-y-4">
+              <h4 className="font-bold text-foreground text-xs uppercase tracking-wider">New Add-on Configuration</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
                   <Label className="text-xs font-semibold">Add-on Name *</Label>
-                  <Input value={addonForm.name} onChange={e => setAddonForm({...addonForm, name: e.target.value})} placeholder="e.g. Sound System" className="rounded-xl border-border/70 h-9" />
+                  <Input value={addonForm.name} onChange={e => setAddonForm({...addonForm, name: e.target.value})} placeholder="e.g. DJ Sound System" className="rounded-xl border-border/70 h-10" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Flat Price (₹)</Label>
-                  <Input type="number" value={addonForm.price} onChange={e => setAddonForm({...addonForm, price: e.target.value})} placeholder="e.g. 2000" className="rounded-xl border-border/70 h-9 font-mono" />
+                  <Label className="text-xs font-semibold">Hourly Rate (₹)</Label>
+                  <Input type="number" value={addonForm.hourly_rate} onChange={e => setAddonForm({...addonForm, hourly_rate: e.target.value})} placeholder="e.g. 500" className="rounded-xl border-border/70 h-10 font-mono" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Rate / Hour (₹)</Label>
-                  <Input type="number" value={addonForm.hourly_rate} onChange={e => setAddonForm({...addonForm, hourly_rate: e.target.value})} placeholder="e.g. 300" className="rounded-xl border-border/70 h-9 font-mono" />
+                  <Label className="text-xs font-semibold">Deposit Amount (₹)</Label>
+                  <Input type="number" value={addonForm.deposit_amount} onChange={e => setAddonForm({...addonForm, deposit_amount: e.target.value})} placeholder="e.g. 2000" className="rounded-xl border-border/70 h-10 font-mono" />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Rate / Day (₹)</Label>
-                  <Input type="number" value={addonForm.daily_rate} onChange={e => setAddonForm({...addonForm, daily_rate: e.target.value})} placeholder="e.g. 1500" className="rounded-xl border-border/70 h-9 font-mono" />
+
+                {/* Half Day */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Half-Day Hours</Label>
+                    <Input type="number" value={addonForm.half_day_hours} onChange={e => setAddonForm({...addonForm, half_day_hours: e.target.value})} className="rounded-xl border-border/70 h-10 font-mono" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Half-Day Price (₹)</Label>
+                    <Input type="number" value={addonForm.half_day_rate} onChange={e => setAddonForm({...addonForm, half_day_rate: e.target.value})} placeholder="e.g. 1500" className="rounded-xl border-border/70 h-10 font-mono" />
+                  </div>
+                </div>
+
+                {/* Full Day */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Full-Day Hours</Label>
+                    <Input value="24 Hours" disabled className="rounded-xl border-border/70 h-10 font-mono bg-sand/20 cursor-not-allowed" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Full-Day Price (₹)</Label>
+                    <Input type="number" value={addonForm.full_day_rate} onChange={e => setAddonForm({...addonForm, full_day_rate: e.target.value})} placeholder="e.g. 3000" className="rounded-xl border-border/70 h-10 font-mono" />
+                  </div>
                 </div>
               </div>
-              <Button onClick={handleAddAddon} disabled={savingAddon} className="bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs h-9 px-5 flex items-center gap-1.5">
-                <Plus className="h-3.5 w-3.5" /> {savingAddon ? 'Adding...' : 'Add Add-on'}
+              <Button onClick={handleAddAddon} disabled={savingAddon} className="bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs h-10 px-5 flex items-center gap-1.5 mt-2">
+                <Plus className="h-3.5 w-3.5" /> {savingAddon ? 'Adding...' : 'Add Add-on Asset'}
               </Button>
             </div>
 
@@ -1908,26 +2580,28 @@ export function AdminVenues() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-sand/15 border-b border-border/30 text-warm-muted text-xs uppercase tracking-wider font-bold">
-                    <th className="px-4 py-3">#</th>
-                    <th className="px-4 py-3">Add-on Name</th>
-                    <th className="px-4 py-3">Flat Price</th>
-                    <th className="px-4 py-3">Rate/Hour</th>
-                    <th className="px-4 py-3">Rate/Day</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
+                    <th className="px-4 py-3.5">#</th>
+                    <th className="px-4 py-3.5">Add-on Asset</th>
+                    <th className="px-4 py-3.5">Hourly Rate</th>
+                    <th className="px-4 py-3.5">Half-Day Rate</th>
+                    <th className="px-4 py-3.5">Full-Day Rate</th>
+                    <th className="px-4 py-3.5">Deposit</th>
+                    <th className="px-4 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/20">
                   {addonsList.length === 0 ? (
-                    <tr><td colSpan={6} className="text-center py-10 text-warm-muted text-xs font-medium">No add-ons yet. Use the form above to add chargeable extras.</td></tr>
+                    <tr><td colSpan={7} className="text-center py-12 text-warm-muted text-xs font-medium">No add-ons yet. Use the form above to add chargeable extras.</td></tr>
                   ) : (
                     addonsList.map((addon, idx) => (
                       <tr key={addon.id} className="hover:bg-sand/5 transition">
-                        <td className="px-4 py-3 text-warm-muted font-mono">{idx + 1}</td>
-                        <td className="px-4 py-3 font-bold text-foreground">{addon.name}</td>
-                        <td className="px-4 py-3 font-mono">{addon.price > 0 ? `₹${addon.price}` : '—'}</td>
-                        <td className="px-4 py-3 font-mono">{addon.hourly_rate > 0 ? `₹${addon.hourly_rate}/hr` : '—'}</td>
-                        <td className="px-4 py-3 font-mono">{addon.daily_rate > 0 ? `₹${addon.daily_rate}/day` : '—'}</td>
-                        <td className="px-4 py-3 text-right">
+                        <td className="px-4 py-3.5 text-warm-muted font-mono">{idx + 1}</td>
+                        <td className="px-4 py-3.5 font-bold text-foreground">{addon.name}</td>
+                        <td className="px-4 py-3.5 font-mono">{addon.hourly_rate > 0 ? `₹${addon.hourly_rate}/hr` : '—'}</td>
+                        <td className="px-4 py-3.5 font-mono">{addon.half_day_rate > 0 ? `₹${addon.half_day_rate}/${addon.half_day_hours || 6}h` : '—'}</td>
+                        <td className="px-4 py-3.5 font-mono">{addon.full_day_rate > 0 ? `₹${addon.full_day_rate}/24h` : '—'}</td>
+                        <td className="px-4 py-3.5 font-mono">{addon.deposit_amount > 0 ? `₹${addon.deposit_amount}` : '—'}</td>
+                        <td className="px-4 py-3.5 text-right">
                           <Button size="icon" variant="ghost" className="h-7 w-7 text-red-500 rounded-lg hover:bg-red-50" onClick={() => { setAddonsList(prev => prev.filter(a => a.id !== addon.id)); toast.success('Add-on removed'); }}>
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -1953,6 +2627,9 @@ export function AdminVenues() {
   // Step 6: Review & Publish
   const renderStep6 = () => {
     const propertyResources = resources.filter(r => r.property === selectedPropertyForWizard?.id);
+    const totalResourcePrice = propertyResources.reduce((sum, r) => sum + (parseFloat(r.full_day_rate) || 0), 0);
+    const totalAddonPrice = addonsList.reduce((sum, a) => sum + (parseFloat(a.full_day_rate) || 0), 0);
+    const fullPackagePrice = totalResourcePrice + totalAddonPrice;
     
     return (
       <motion.div 
@@ -2076,10 +2753,35 @@ export function AdminVenues() {
                       <Edit className="h-3.5 w-3.5 text-warm-muted hover:text-primary" />
                     </Button>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  
+                  {/* Full Package Display */}
+                  <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex justify-between items-center shadow-inner">
                     <div>
-                      <p className="text-xs text-warm-muted uppercase font-bold">Refundable Security Deposit</p>
-                      <p className="text-xs font-bold text-foreground mt-0.5">{formatCurrency(propertyForm.security_deposit)}</p>
+                      <p className="text-[10px] text-primary font-black uppercase tracking-wider">Full Package Rate</p>
+                      <p className="text-[10px] text-primary/70 font-bold mt-0.5">Sum of all resources & add-ons (Full Day)</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-black text-primary font-mono tracking-tight">₹{fullPackagePrice.toLocaleString('en-IN')}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-warm-muted uppercase font-bold">Refundable Security Deposit (₹)</Label>
+                      <Input 
+                        type="number" 
+                        value={propertyForm.security_deposit} 
+                        onChange={e => setPropertyForm({ ...propertyForm, security_deposit: parseFloat(e.target.value) || 0 })} 
+                        className="rounded-xl border-border/70 h-8 text-xs font-mono font-bold" 
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-warm-muted uppercase font-bold">Tax Percentage (%)</Label>
+                      <Input 
+                        type="number" 
+                        value={propertyForm.tax_percentage} 
+                        onChange={e => setPropertyForm({ ...propertyForm, tax_percentage: parseFloat(e.target.value) || 0 })} 
+                        className="rounded-xl border-border/70 h-8 text-xs font-mono font-bold" 
+                      />
                     </div>
                     <div>
                       <p className="text-xs text-warm-muted uppercase font-bold">Cancellation Allowed</p>
@@ -2100,26 +2802,23 @@ export function AdminVenues() {
                   </div>
                 </div>
 
-                {/* Amenities */}
+                {/* Add-ons Offered */}
                 <div className="bg-sand/5 border border-border/30 rounded-2xl p-5 space-y-4">
                   <div className="flex justify-between items-center border-b border-border/20 pb-2">
-                    <h3 className="font-bold text-xs text-primary uppercase tracking-wider">Amenities Offered</h3>
-                    <Button variant="ghost" onClick={() => setWorkflowStep(6)} className="h-6 w-6 p-0 hover:bg-sand/20 rounded-full">
+                    <h3 className="font-bold text-xs text-primary uppercase tracking-wider">Add-ons Offered</h3>
+                    <Button variant="ghost" onClick={() => setWorkflowStep(5)} className="h-6 w-6 p-0 hover:bg-sand/20 rounded-full">
                       <Edit className="h-3.5 w-3.5 text-warm-muted hover:text-primary" />
                     </Button>
                   </div>
-                  {propertyForm.amenities.length === 0 ? (
-                    <p className="text-xs text-warm-muted italic font-medium">No amenities linked.</p>
+                  {addonsList.length === 0 ? (
+                    <p className="text-xs text-warm-muted italic font-medium">No add-ons linked.</p>
                   ) : (
                     <div className="flex flex-wrap gap-1.5">
-                      {propertyForm.amenities.map((amenityId: string) => {
-                        const matched = globalAmenities.find((a: any) => String(a.id) === String(amenityId) || a.label === amenityId);
-                        return (
-                          <Badge key={amenityId} className="bg-[#FAF9F6] text-primary border border-border/40 font-bold text-xs uppercase tracking-wider px-2 py-0.5 rounded-lg shadow-sm">
-                            {matched ? matched.label : amenityId}
-                          </Badge>
-                        );
-                      })}
+                      {addonsList.map((addon: any) => (
+                        <Badge key={addon.id} className="bg-[#FAF9F6] text-primary border border-border/40 font-bold text-xs uppercase tracking-wider px-2 py-0.5 rounded-lg shadow-sm">
+                          {addon.name}
+                        </Badge>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -2127,8 +2826,8 @@ export function AdminVenues() {
             </div>
           </CardContent>
           <CardFooter className="border-t border-border/40 pt-4 flex justify-between bg-sand/5 p-4 rounded-b-2xl">
-            <Button variant="ghost" onClick={() => setWorkflowStep(6)} className="rounded-xl font-bold text-xs">
-              Back to Amenities
+            <Button variant="ghost" onClick={() => setWorkflowStep(5)} className="rounded-xl font-bold text-xs">
+              Back to Add-ons
             </Button>
             <Button 
               onClick={handlePublishProperty}
@@ -2567,14 +3266,16 @@ export function AdminVenues() {
                 <CardContent className="pt-6 space-y-6 text-xs font-semibold">
                   <div className="grid grid-cols-2 gap-4 border-b border-border/30 pb-4">
                     <div>
-                      <span className="text-xs text-warm-muted uppercase font-bold tracking-wider">Applicant</span>
-                      <p className="font-bold text-xs text-foreground mt-0.5">{viewingBooking.user_name || "Samaj Member"}</p>
-                      <p className="text-xs text-warm-muted mt-0.5">{viewingBooking.user_phone}</p>
+                      <span className="text-xs text-warm-muted uppercase font-bold tracking-wider">Applicant / Guest</span>
+                      <p className="font-bold text-xs text-foreground mt-0.5">{viewingBooking.guest_name || viewingBooking.user_name || "Samaj Member"}</p>
+                      <p className="text-xs text-warm-muted mt-0.5">Contact: {viewingBooking.guest_phone || viewingBooking.user_phone || "N/A"}</p>
+                      <p className="text-xs text-warm-muted mt-0.5 break-words">Email: {viewingBooking.guest_email || viewingBooking.user_email || "N/A"}</p>
                     </div>
                     <div>
-                      <span className="text-xs text-warm-muted uppercase font-bold tracking-wider">Asset Unit</span>
-                      <p className="font-bold text-xs text-foreground mt-0.5">{viewingBooking.property_name}</p>
-                      <p className="text-xs text-warm-muted mt-0.5">{viewingBooking.resource_name}</p>
+                      <span className="text-xs text-warm-muted uppercase font-bold tracking-wider">Event & Asset Details</span>
+                      <p className="font-bold text-xs text-foreground mt-0.5">{viewingBooking.event_name || "No Event Name"} ({viewingBooking.event_type || "General"})</p>
+                      <p className="text-xs text-warm-muted mt-0.5">Property: {viewingBooking.property_name || "Ahir Samaj Bhavan"}</p>
+                      <p className="text-xs text-warm-muted mt-0.5">Asset: {viewingBooking.resource_name || "Main Hall"}</p>
                     </div>
                   </div>
 
@@ -3091,7 +3792,711 @@ export function AdminVenues() {
     );
   };
 
+  // ==================== SUPER ADMIN RENDER FUNCTIONS ====================
+
+  const ImageCarousel = ({ photos }: { photos: string[] }) => {
+    const [[page, direction], setPage] = useState([0, 0]);
+
+    if (!photos || photos.length === 0) {
+      return (
+        <div className="aspect-[16/9] w-full rounded-2xl border border-dashed border-border/60 bg-sand/5 flex flex-col items-center justify-center text-warm-muted gap-2">
+          <ImageIcon className="h-10 w-10 text-warm-muted/40" />
+          <p className="text-xs font-semibold">No photos uploaded for this property</p>
+        </div>
+      );
+    }
+
+    const imageIndex = (page % photos.length + photos.length) % photos.length;
+
+    const paginate = (newDirection: number) => {
+      setPage([page + newDirection, newDirection]);
+    };
+
+    const slideVariants = {
+      enter: (direction: number) => ({
+        x: direction > 0 ? 500 : -500,
+        opacity: 0
+      }),
+      center: {
+        zIndex: 1,
+        x: 0,
+        opacity: 1
+      },
+      exit: (direction: number) => ({
+        zIndex: 0,
+        x: direction < 0 ? 500 : -500,
+        opacity: 0
+      })
+    };
+
+    return (
+      <div className="relative aspect-[16/9] w-full rounded-3xl overflow-hidden border border-border/40 bg-card group shadow-md">
+        <AnimatePresence initial={false} custom={direction}>
+          <motion.img
+            key={page}
+            src={getImageUrl(photos[imageIndex])}
+            custom={direction}
+            variants={slideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{
+              x: { type: "spring", stiffness: 300, damping: 30 },
+              opacity: { duration: 0.2 }
+            }}
+            className="absolute inset-0 w-full h-full object-cover cursor-zoom-in"
+            onClick={() => setLightboxImage(getImageUrl(photos[imageIndex]))}
+          />
+        </AnimatePresence>
+
+        {photos.length > 1 && (
+          <>
+            {/* Navigation Arrows */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                paginate(-1);
+              }}
+              className="absolute left-4 top-1/2 -translate-y-1/2 z-10 bg-white/90 hover:bg-white text-foreground rounded-full p-2.5 shadow-md hover:scale-105 transition-all duration-200 focus:outline-none flex items-center justify-center border border-border/20"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                paginate(1);
+              }}
+              className="absolute right-4 top-1/2 -translate-y-1/2 z-10 bg-white/90 hover:bg-white text-foreground rounded-full p-2.5 shadow-md hover:scale-105 transition-all duration-200 focus:outline-none flex items-center justify-center border border-border/20"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+
+            {/* Dots Indicators */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10 bg-black/25 px-3 py-1.5 rounded-full backdrop-blur-sm">
+              {photos.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const diff = i - imageIndex;
+                    if (diff !== 0) {
+                      paginate(diff);
+                    }
+                  }}
+                  className={`h-2 w-2 rounded-full transition-all duration-300 ${
+                    imageIndex === i ? 'bg-white w-4' : 'bg-white/50 hover:bg-white/80'
+                  }`}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Zoom Overlay Indicator */}
+        <div className="absolute top-4 right-4 bg-white/95 text-foreground px-3 py-1.5 rounded-xl text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none flex items-center gap-1 shadow-sm border border-border/20">
+          <Eye className="h-3.5 w-3.5" /> Click for Fullscreen
+        </div>
+      </div>
+    );
+  };
+
+  const renderPropertyDetailsContent = (property: any) => {
+    if (!property) return null;
+    const propResources = resources.filter(r => String(r.property) === String(property.id));
+
+    return (
+      <div className="space-y-6 text-xs font-semibold text-foreground">
+        
+        {/* Image Carousel */}
+        <ImageCarousel photos={property.photos || []} />
+
+        {/* 1. CORE STATS GRID */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-[#FAF9F6] border border-border/40 p-3 rounded-2xl flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] text-warm-muted uppercase tracking-wider block font-bold">Ownership</span>
+            <span className="text-xs font-black mt-1 text-primary">{property.ownership || "Community Owned"}</span>
+          </div>
+          <div className="bg-[#FAF9F6] border border-border/40 p-3 rounded-2xl flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] text-warm-muted uppercase tracking-wider block font-bold">Security Deposit</span>
+            <span className="text-xs font-black mt-1 text-primary">₹{property.security_deposit || 0}</span>
+          </div>
+          <div className="bg-[#FAF9F6] border border-border/40 p-3 rounded-2xl flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] text-warm-muted uppercase tracking-wider block font-bold">Refund Policy</span>
+            <span className="text-xs font-black mt-1 text-primary">
+              {property.cancellation_allowed ? `${property.refund_percentage || 100}% Refund` : "No Refund"}
+            </span>
+          </div>
+          <div className="bg-[#FAF9F6] border border-border/40 p-3 rounded-2xl flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] text-warm-muted uppercase tracking-wider block font-bold">Cancellation Window</span>
+            <span className="text-xs font-black mt-1 text-primary">
+              {property.cancellation_allowed ? `Up to ${property.cancellation_hours || 24} hrs` : "N/A"}
+            </span>
+          </div>
+        </div>
+
+        {/* 2. BOOKING POLICIES / GATES */}
+        <div className="bg-[#FAF9F6] border border-border/40 p-4 rounded-2xl space-y-2 shadow-sm">
+          <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Booking Configuration & Policies</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+            <div className="flex items-center gap-2">
+              <div className={`h-2 w-2 rounded-full ${property.approval_required ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+              <span>{property.approval_required ? 'Admin Approval Required' : 'Instant Bookings Enabled'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className={`h-2 w-2 rounded-full ${property.manual_payment_allowed ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+              <span>{property.manual_payment_allowed ? 'Manual Payments Accepted' : 'Online Only'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className={`h-2 w-2 rounded-full ${property.cancellation_allowed ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <span>{property.cancellation_allowed ? 'Cancellation Allowed' : 'No Cancellation'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. DESCRIPTION & RULES */}
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Overview Description</h4>
+            <div className="bg-[#FAF9F6] border border-border/30 p-3.5 rounded-2xl text-xs font-medium text-foreground leading-relaxed whitespace-pre-wrap shadow-inner">
+              {property.description || "No overview description provided."}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Rules & Policies</h4>
+            <div className="bg-[#FAF9F6] border border-border/30 p-3.5 rounded-2xl text-xs font-medium text-foreground leading-relaxed whitespace-pre-wrap shadow-inner">
+              {property.rules || "No specific rules configured."}
+            </div>
+          </div>
+
+          {property.terms_conditions && (
+            <div className="space-y-1">
+              <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Terms & Conditions</h4>
+              <div className="bg-[#FAF9F6] border border-border/30 p-3.5 rounded-2xl text-xs font-medium text-foreground leading-relaxed whitespace-pre-wrap shadow-inner">
+                {property.terms_conditions}
+              </div>
+            </div>
+          )}
+
+          {(() => {
+            if (!property.internal_notes) return null;
+            let parsedNotes: any = null;
+            try {
+              parsedNotes = JSON.parse(property.internal_notes);
+            } catch (e) {
+              // Not JSON
+            }
+
+            if (parsedNotes && Array.isArray(parsedNotes.addons) && parsedNotes.addons.length > 0) {
+              return (
+                <div className="space-y-2">
+                  <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider text-amber-700">Configured Add-ons</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {parsedNotes.addons.map((addon: any, idx: number) => (
+                      <div key={idx} className="bg-amber-50/50 border border-amber-200/50 p-3 rounded-2xl shadow-sm flex flex-col gap-1.5">
+                        <div className="flex justify-between items-start">
+                          <span className="font-bold text-amber-900 text-sm">{addon.name}</span>
+                          {addon.deposit_amount && addon.deposit_amount !== "0" && addon.deposit_amount !== 0 && (
+                            <span className="text-[10px] bg-amber-200/80 text-amber-900 px-2 py-0.5 rounded-lg font-bold">
+                              Deposit: ₹{addon.deposit_amount}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-[10px] text-amber-800">
+                          {addon.hourly_rate && addon.hourly_rate !== "0" && addon.hourly_rate !== 0 && (
+                            <div>
+                              <span className="uppercase tracking-wider font-bold block opacity-60">Hourly</span>
+                              <span className="font-black text-amber-900 text-xs">₹{addon.hourly_rate}</span>
+                            </div>
+                          )}
+                          {addon.half_day_rate && addon.half_day_rate !== "0" && addon.half_day_rate !== 0 && (
+                            <div>
+                              <span className="uppercase tracking-wider font-bold block opacity-60">Half Day ({addon.half_day_hours || 6}h)</span>
+                              <span className="font-black text-amber-900 text-xs">₹{addon.half_day_rate}</span>
+                            </div>
+                          )}
+                          {addon.full_day_rate && addon.full_day_rate !== "0" && addon.full_day_rate !== 0 && (
+                            <div>
+                              <span className="uppercase tracking-wider font-bold block opacity-60">Full Day</span>
+                              <span className="font-black text-amber-900 text-xs">₹{addon.full_day_rate}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
+            // Fallback for normal text notes
+            return (
+              <div className="space-y-1">
+                <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider text-amber-700">Internal Admin Notes</h4>
+                <div className="bg-amber-50/50 border border-amber-200/50 p-3.5 rounded-2xl text-xs font-medium text-amber-900 leading-relaxed whitespace-pre-wrap shadow-inner">
+                  {property.internal_notes}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* 4. AMENITIES */}
+        {property.amenities && property.amenities.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Available Amenities</h4>
+            <div className="flex flex-wrap gap-1.5">
+              {property.amenities.map((amenity: string, i: number) => (
+                <Badge
+                  key={i}
+                  variant="secondary"
+                  className="bg-primary/5 hover:bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1 shadow-sm"
+                >
+                  <Check className="h-3 w-3 text-primary" />
+                  {amenity}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 5. LOCATION & CONTACT INFORMATION */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-border/40 pt-4">
+          <div className="space-y-2.5">
+            <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Location Details</h4>
+            <div className="bg-[#FAF9F6] border border-border/30 p-3.5 rounded-2xl space-y-2 shadow-sm font-semibold">
+              <p className="text-foreground leading-relaxed">
+                {property.address}<br />
+                {property.city}, {property.state} - {property.pincode}<br />
+                {property.country}
+              </p>
+              {property.google_map_url && (
+                <a
+                  href={property.google_map_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-primary hover:underline text-[11px] font-bold pt-1"
+                >
+                  <MapPin className="h-3.5 w-3.5" /> View on Google Maps
+                </a>
+              )}
+              {(property.latitude || property.longitude) && (
+                <div className="text-[10px] text-warm-muted pt-1 flex gap-3">
+                  <span>Lat: <strong className="text-foreground">{property.latitude || "N/A"}</strong></span>
+                  <span>Lng: <strong className="text-foreground">{property.longitude || "N/A"}</strong></span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Contact Directory</h4>
+            <div className="bg-[#FAF9F6] border border-border/30 p-3.5 rounded-2xl space-y-2 shadow-sm">
+              <div className="flex items-center gap-2">
+                <User className="h-4 w-4 text-primary/70 shrink-0" />
+                <div>
+                  <p className="text-[10px] text-warm-muted uppercase">Contact Person</p>
+                  <p className="text-foreground font-black">{property.contact_person_name || "N/A"}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Phone className="h-4 w-4 text-primary/70 shrink-0" />
+                <div>
+                  <p className="text-[10px] text-warm-muted uppercase">Primary Phone</p>
+                  <p className="text-foreground font-black">{property.contact_phone || "N/A"}</p>
+                </div>
+              </div>
+              {property.alternate_phone && (
+                <div className="flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-primary/70 shrink-0" />
+                  <div>
+                    <p className="text-[10px] text-warm-muted uppercase">Alternate Phone</p>
+                    <p className="text-foreground font-black">{property.alternate_phone}</p>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4 text-primary/70 shrink-0" />
+                <div>
+                  <p className="text-[10px] text-warm-muted uppercase">Email Address</p>
+                  <p className="text-foreground font-black">{property.contact_email || "N/A"}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 6. GENERATED RESOURCES & RATES */}
+        <div className="space-y-2.5 border-t border-border/40 pt-4">
+          <h4 className="text-[10px] text-warm-muted font-black uppercase tracking-wider">Associated Resource Units ({propResources.length})</h4>
+          {propResources.length === 0 ? (
+            <p className="text-xs text-warm-muted italic bg-[#FAF9F6] p-4 rounded-2xl border border-dashed border-border/40 text-center">
+              No resource units generated for this property.
+            </p>
+          ) : (
+            <div className="border border-border/40 rounded-2xl overflow-hidden bg-card text-xs shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-sand/15 border-b border-border/30 text-warm-muted font-bold text-[10px] uppercase">
+                    <th className="px-4 py-2.5">Resource Name</th>
+                    <th className="px-4 py-2.5">Type</th>
+                    <th className="px-4 py-2.5">Max Capacity</th>
+                    <th className="px-4 py-2.5">Pricing Rates (₹)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/20 font-semibold text-foreground">
+                  {propResources.map((r: any) => (
+                    <tr key={r.id} className="hover:bg-sand/5">
+                      <td className="px-4 py-3 font-bold text-foreground">{r.name}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant="secondary" className="bg-sand/20 text-warm-muted border border-border/30 text-[9px] font-bold uppercase">{r.resource_type}</Badge>
+                      </td>
+                      <td className="px-4 py-3 font-mono">{r.capacity} Pax</td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-0.5 text-[10px] font-mono text-warm-muted">
+                          {r.hourly_rate > 0 && <div><span className="font-bold text-foreground">₹{r.hourly_rate}</span>/hr</div>}
+                          {r.half_day_rate > 0 && <div><span className="font-bold text-foreground">₹{r.half_day_rate}</span>/half</div>}
+                          {r.full_day_rate > 0 && <div><span className="font-bold text-foreground">₹{r.full_day_rate}</span>/day</div>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderDetailSheetForSuperAdmin = () => {
+    if (!selectedPropertyForDetails) return null;
+
+    return (
+      <Sheet open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+        <SheetContent className="sm:max-w-3xl w-full overflow-y-auto bg-card border-l border-border/70 p-6 space-y-6">
+          <SheetHeader className="text-left space-y-2 border-b border-border/60 pb-4">
+            <div className="flex items-center justify-between">
+              <Badge className="bg-primary text-white font-bold uppercase text-xs tracking-wider">
+                {selectedPropertyForDetails.property_type}
+              </Badge>
+              <Badge className={`font-bold uppercase text-xs tracking-wider ${
+                selectedPropertyForDetails.status === "Approved" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
+                selectedPropertyForDetails.status === "Rejected" ? "bg-rose-50 text-rose-700 border border-rose-200" :
+                "bg-amber-50 text-amber-700 border border-amber-200"
+              }`}>
+                {selectedPropertyForDetails.status}
+              </Badge>
+            </div>
+            <SheetTitle className="text-2xl font-bold text-foreground mt-1">
+              {selectedPropertyForDetails.name}
+            </SheetTitle>
+            <p className="text-xs text-[#EA580C] font-bold">
+              Submitted by community: {selectedPropertyForDetails.community_name || "Community Admin"}
+            </p>
+            <SheetDescription className="text-xs text-warm-muted flex items-center gap-1 mt-0.5 font-semibold">
+              <MapPin className="h-3.5 w-3.5 text-primary/70" /> 
+              {selectedPropertyForDetails.address}, {selectedPropertyForDetails.city}, {selectedPropertyForDetails.state}, {selectedPropertyForDetails.pincode}
+            </SheetDescription>
+          </SheetHeader>
+
+          {/* Core Property Details Render */}
+          {renderPropertyDetailsContent(selectedPropertyForDetails)}
+
+          {/* Action buttons inside the sheet */}
+          <div className="border-t border-border/40 pt-5 flex justify-end gap-3">
+            <Button
+              variant="outline"
+              onClick={() => setIsDetailsOpen(false)}
+              className="rounded-xl font-bold text-xs h-10 px-5"
+            >
+              Close
+            </Button>
+            {selectedPropertyForDetails.status === 'Pending Approval' && (
+              <>
+                <Button
+                  onClick={async () => {
+                    try {
+                      await api.approveBookingProperty(selectedPropertyForDetails.id);
+                      toast.success(`Property "${selectedPropertyForDetails.name}" approved successfully!`);
+                      setIsDetailsOpen(false);
+                      fetchData();
+                    } catch (e: any) {
+                      toast.error(e.message || "Failed to approve property");
+                    }
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl h-10 px-5 shadow-sm"
+                >
+                  Approve Property
+                </Button>
+                <Button
+                  onClick={() => {
+                    setPropertyToReject(selectedPropertyForDetails);
+                    setRejectReasonInput("");
+                    setIsRejectDialogOpen(true);
+                  }}
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl h-10 px-5 shadow-sm"
+                >
+                  Reject Property
+                </Button>
+              </>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  };
+
+  const renderRejectReasonDialog = () => {
+    return (
+      <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-card border border-border/40 p-6 space-y-4 rounded-3xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black tracking-tight text-foreground uppercase">
+              Reject Property Submission
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-xs font-semibold text-warm-muted">
+            <p>Please enter a rejection reason. This will be sent back to the community admin to help them make the necessary adjustments.</p>
+            <Textarea
+              placeholder="e.g. Please upload higher resolution cover photos and correct the pricing structure for halls."
+              value={rejectReasonInput}
+              onChange={(e) => setRejectReasonInput(e.target.value)}
+              className="h-24 rounded-xl border border-border/70 text-xs font-medium text-foreground outline-none"
+            />
+          </div>
+          <DialogFooter className="flex gap-2 justify-end pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsRejectDialogOpen(false)}
+              className="rounded-xl font-bold text-xs h-9"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!rejectReasonInput.trim()) {
+                  toast.error("Rejection reason is required");
+                  return;
+                }
+                try {
+                  await api.rejectBookingProperty(propertyToReject.id, { rejection_reason: rejectReasonInput.trim() });
+                  toast.success(`Property "${propertyToReject.name}" rejected successfully.`);
+                  setIsRejectDialogOpen(false);
+                  setIsDetailsOpen(false);
+                  fetchData();
+                } catch (e: any) {
+                  toast.error(e.message || "Failed to reject property");
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl h-9"
+            >
+              Reject Submission
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
+  const renderSuperAdminApprovalView = () => {
+    const filteredProps = properties.filter((p: any) => {
+      if (approvalFilter === 'All') return true;
+      return p.status === approvalFilter;
+    });
+
+    const pendingCount = properties.filter((p: any) => p.status === 'Pending Approval').length;
+    const approvedCount = properties.filter((p: any) => p.status === 'Approved').length;
+    const rejectedCount = properties.filter((p: any) => p.status === 'Rejected').length;
+
+    return (
+      <div className="flex flex-col min-h-screen bg-[#FAF9F6] pb-12 font-sans w-full px-6 md:px-8 pt-6">
+        {/* Header Row */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-border/40 pb-5">
+          <div>
+            <h1 className="text-2xl font-black text-foreground tracking-tight flex items-center gap-2">
+              <ShieldAlert className="h-6.5 w-6.5 text-[#3D1A00]" />
+              Superadmin Property Approval Workspace
+            </h1>
+            <p className="text-xs text-warm-muted mt-1 font-bold">
+              Review, approve, or reject property listings submitted by community admins. Approved properties will be visible to members.
+            </p>
+          </div>
+        </div>
+
+        {/* Tab Filter Row */}
+        <div className="flex gap-2 p-1.5 bg-sand/20 rounded-2xl overflow-x-auto scrollbar-none border border-border/40 mt-6 bg-white shadow-sm w-full max-w-lg">
+          {[
+            { id: 'Pending Approval', label: `Pending (${pendingCount})`, icon: Clock },
+            { id: 'Approved', label: `Approved (${approvedCount})`, icon: CheckCircle2 },
+            { id: 'Rejected', label: `Rejected (${rejectedCount})`, icon: AlertCircle },
+            { id: 'All', label: `All (${properties.length})`, icon: List }
+          ].map(tab => {
+            const isActive = approvalFilter === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setApprovalFilter(tab.id as any)}
+                className="relative px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap focus:outline-none flex-1"
+              >
+                {isActive && (
+                  <motion.div
+                    layoutId="activeApprovalIndicator"
+                    className="absolute inset-0 bg-[#FAF9F6] border border-border/50 rounded-xl shadow-sm"
+                    transition={{ type: "spring", stiffness: 350, damping: 28 }}
+                  />
+                )}
+                <span className={`relative z-10 flex items-center justify-center gap-1.5 transition-colors duration-200 ${
+                  isActive ? 'text-primary' : 'text-warm-muted hover:text-foreground'
+                }`}>
+                  <tab.icon className="h-4 w-4" />
+                  {tab.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Main Properties Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+          {filteredProps.length === 0 ? (
+            <div className="col-span-full py-16 flex flex-col items-center justify-center text-center bg-white border border-border/40 rounded-3xl shadow-sm">
+              <Building2 className="h-12 w-12 text-warm-muted/40 mb-3" />
+              <h3 className="text-sm font-black text-foreground uppercase tracking-tight">No Properties Found</h3>
+              <p className="text-xs text-warm-muted mt-1 max-w-md px-4">
+                There are currently no properties in the "{approvalFilter}" state.
+              </p>
+            </div>
+          ) : (
+            filteredProps.map((property: any) => {
+              const coverPhoto = property.photos && property.photos.length > 0 ? getImageUrl(property.photos[0]) : null;
+              const propResources = resources.filter(r => String(r.property) === String(property.id));
+              
+              return (
+                <motion.div
+                  key={property.id}
+                  whileHover={{ y: -4 }}
+                  className="bg-white border border-border/40 rounded-3xl overflow-hidden shadow-sm hover:shadow-lg transition-all duration-300 flex flex-col justify-between min-h-[300px]"
+                >
+                  <div>
+                    {/* Property Image Header */}
+                    <div className="h-40 bg-sand/10 relative overflow-hidden flex items-center justify-center border-b border-border/30">
+                      {coverPhoto ? (
+                        <img src={coverPhoto} alt={property.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="flex flex-col items-center text-warm-muted/40">
+                          <Building2 className="h-10 w-10" />
+                          <span className="text-[10px] font-bold mt-1 uppercase tracking-wider">No Cover Image</span>
+                        </div>
+                      )}
+                      
+                      {/* Community Badge */}
+                      <Badge className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm text-foreground hover:bg-white border border-border/40 text-[10px] font-bold shadow-sm rounded-xl">
+                        {property.community_name || "Community Listing"}
+                      </Badge>
+                      
+                      {/* Status Pill */}
+                      <Badge className={`absolute top-3 right-3 text-[10px] font-bold shadow-sm rounded-xl uppercase tracking-wider ${
+                        property.status === 'Approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                        property.status === 'Rejected' ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                        'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}>
+                        {property.status}
+                      </Badge>
+                    </div>
+
+                    {/* Card Content */}
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <span className="text-[10px] bg-primary/10 text-primary font-bold uppercase tracking-wider px-2 py-0.5 rounded">
+                          {property.property_type}
+                        </span>
+                        <h3 className="text-base font-black text-foreground tracking-tight mt-1 truncate">
+                          {property.name}
+                        </h3>
+                        <p className="text-xs text-warm-muted flex items-center gap-1 mt-0.5 truncate font-semibold">
+                          <MapPin className="h-3.5 w-3.5 text-primary/70 shrink-0" />
+                          {property.address}, {property.city}
+                        </p>
+                      </div>
+
+                      {/* Info Row */}
+                      <div className="flex items-center justify-between text-[11px] text-warm-muted border-t border-border/20 pt-2 font-semibold">
+                        <span>Resources: <strong className="text-foreground">{propResources.length} units</strong></span>
+                        <span>Security Dep: <strong className="text-foreground">₹{property.security_deposit || 0}</strong></span>
+                      </div>
+
+                      {property.rejection_reason && (
+                        <div className="bg-rose-50/50 border border-rose-100 p-2.5 rounded-xl text-[11px] text-rose-800">
+                          <span className="font-bold uppercase tracking-wider block text-[9px] text-rose-600 mb-0.5">Rejection Reason</span>
+                          {property.rejection_reason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions Footer */}
+                  <div className="p-4 bg-sand/5 border-t border-border/20 flex gap-2">
+                    <Button
+                      onClick={() => {
+                        setSelectedPropertyForDetails(property);
+                        setIsDetailsOpen(true);
+                      }}
+                      className="flex-1 bg-white hover:bg-sand/10 border border-border/50 text-foreground font-bold text-xs rounded-xl h-9 shadow-sm"
+                    >
+                      <Eye className="h-3.5 w-3.5 mr-1" /> View Details
+                    </Button>
+
+                    {property.status === 'Pending Approval' && (
+                      <>
+                        <Button
+                          onClick={async () => {
+                            try {
+                              await api.approveBookingProperty(property.id);
+                              toast.success(`Property "${property.name}" approved successfully!`);
+                              fetchData();
+                            } catch (e: any) {
+                              toast.error(e.message || "Failed to approve property");
+                            }
+                          }}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl h-9 px-3.5 shadow-sm"
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setPropertyToReject(property);
+                            setRejectReasonInput("");
+                            setIsRejectDialogOpen(true);
+                          }}
+                          className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl h-9 px-3.5 shadow-sm"
+                        >
+                          Reject
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Detailed Sheet (Slide Over) */}
+        {renderDetailSheetForSuperAdmin()}
+
+        {/* Reject Dialog */}
+        {renderRejectReasonDialog()}
+      </div>
+    );
+  };
+
   // ==================== MAIN RENDER LAYOUT ====================
+
+  if (isSuperAdmin) {
+    return renderSuperAdminApprovalView();
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FAF9F6] pb-12 font-sans w-full px-6 md:px-8 pt-6">
@@ -3329,7 +4734,7 @@ export function AdminVenues() {
 
       {/* ================= 4. PROPERTIES DETAIL SLIDE OVER SHEET ================= */}
       <Sheet open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
-        <SheetContent className="sm:max-w-2xl w-full overflow-y-auto bg-card border-l border-border/70 p-6 space-y-6">
+        <SheetContent className="sm:max-w-3xl w-full overflow-y-auto bg-card border-l border-border/70 p-6 space-y-6">
           <SheetHeader className="text-left space-y-2 border-b border-border/60 pb-4">
             <div className="flex items-center justify-between">
               <Badge className="bg-primary text-white font-bold uppercase text-xs tracking-wider">
@@ -3346,53 +4751,13 @@ export function AdminVenues() {
             <SheetTitle className="text-2xl font-bold text-foreground mt-1">
               {selectedPropertyForDetails?.name}
             </SheetTitle>
-            <SheetDescription className="text-xs text-warm-muted flex items-center gap-1 mt-0.5">
+            <SheetDescription className="text-xs text-warm-muted flex items-center gap-1 mt-0.5 font-semibold">
               <MapPin className="h-3.5 w-3.5 text-primary/70" /> {selectedPropertyForDetails?.address}, {selectedPropertyForDetails?.city}, {selectedPropertyForDetails?.state}, {selectedPropertyForDetails?.pincode}
             </SheetDescription>
           </SheetHeader>
 
-          {/* Interactive Photos Gallery block */}
-          {selectedPropertyForDetails?.photos && selectedPropertyForDetails.photos.length > 0 ? (
-            <div className="space-y-2">
-              <h4 className="text-sm font-bold text-foreground">Property Gallery Preview</h4>
-              <div className="grid grid-cols-2 gap-3">
-                {selectedPropertyForDetails.photos.map((photo: string, index: number) => (
-                  <div key={index} className="aspect-video rounded-xl overflow-hidden border border-border/60 bg-sand/10 relative group">
-                    <img src={getImageUrl(photo)} alt="" className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <h4 className="text-sm font-bold text-foreground">Property Gallery Preview</h4>
-              <div className="aspect-video rounded-xl border border-dashed border-border/60 bg-sand/5 flex flex-col items-center justify-center text-warm-muted gap-2">
-                <ImageIcon className="h-8 w-8 text-warm-muted/40" />
-                <p className="text-xs font-semibold">No photos uploaded for this property</p>
-              </div>
-            </div>
-          )}
-
-          {/* Details */}
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-sand/10 rounded-xl p-3 border border-border/40">
-                <span className="text-xs text-warm-muted font-bold block uppercase tracking-wider">Ownership Status</span>
-                <span className="text-xs font-bold text-foreground">{selectedPropertyForDetails?.ownership || "Community Owned"}</span>
-              </div>
-              <div className="bg-sand/10 rounded-xl p-3 border border-border/40">
-                <span className="text-xs text-warm-muted font-bold block uppercase tracking-wider">Refundable Deposit</span>
-                <span className="text-xs font-bold text-foreground">₹{selectedPropertyForDetails?.security_deposit || 0}</span>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <span className="text-xs text-warm-muted font-bold block uppercase tracking-wider">Overview Description</span>
-              <p className="text-xs text-foreground bg-sand/5 p-3 rounded-xl border border-border/30 leading-relaxed whitespace-pre-wrap">
-                {selectedPropertyForDetails?.description || "No overview description provided."}
-              </p>
-            </div>
-          </div>
+          {/* Core Property Details Render */}
+          {renderPropertyDetailsContent(selectedPropertyForDetails)}
         </SheetContent>
       </Sheet>
 

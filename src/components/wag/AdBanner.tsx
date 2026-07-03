@@ -7,7 +7,7 @@ function resolveImageUrl(raw: string): string {
   if (!raw) return "";
   return raw.startsWith("http")
     ? raw
-    : `http://localhost:8000${raw.startsWith("/") ? "" : "/"}${raw}`;
+    : `${raw.startsWith("/") ? "" : "/"}${raw}`;
 }
 
 export function AdBanner({ slot }: { slot: string }) {

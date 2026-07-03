@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """
 Django Backend Startup Script for WE ARE UNITED
 Starts the Django development server on port 8000
@@ -39,4 +39,4 @@ print("=" * 60)
 print()
 
 # Run manage.py
-subprocess.run([python_exe, '-u', 'manage.py', 'runserver', '8000'])
+subprocess.run([python_exe, '-u', 'manage.py', 'runserver', '0.0.0.0:8000'])

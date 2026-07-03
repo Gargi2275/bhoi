@@ -1,20 +1,22 @@
 "use client";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect, type ComponentType } from "react";
-import { ChevronLeft, LogOut, Menu, X, MapPin, Globe, Facebook, Twitter, Youtube, Phone, Mail, Building2, Users, Calendar, ExternalLink, Loader2 } from "lucide-react";
+import { ChevronLeft, LogOut, Menu, X, MapPin, Globe, Facebook, Twitter, Youtube, Phone, Mail, Building2, Users, Calendar, ExternalLink, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { AdBanner } from "@/components/wag/AdBanner";
 import { api } from "@/lib/api";
+import { toast } from "sonner";
 
-export interface SidebarItem { to: string; label: string; icon: ComponentType<{ className?: string }>; badge?: number; search?: Record<string, string>; isSubItem?: boolean; }
+export interface SidebarItem { to: string; label: string; icon: ComponentType<{ className?: string }>; badge?: number; search?: Record<string, string>; isSubItem?: boolean; locked?: boolean; }
 
 export function DashboardSidebar({ items, title }: { items: SidebarItem[]; title: string }) {
   const [collapsed, setCollapsed] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const path = useRouterState({ select: s => s.location.pathname });
   const { logout, user } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -77,15 +79,33 @@ export function DashboardSidebar({ items, title }: { items: SidebarItem[]; title
           const active = path === it.to && (!it.search || Object.entries(it.search).every(([k, v]) => searchString.includes(`${k}=${v}`)));
           const Icon = it.icon;
           return (
-            <Link key={it.to + (it.search ? JSON.stringify(it.search) : '')} to={it.to} search={it.search} className={cn(
-              "relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition group",
-              active ? "bg-primary/10 text-primary animate-pulse-subtle" : "text-foreground hover:bg-sand",
-              collapsed && "justify-center",
-              it.isSubItem && !collapsed && "pl-8 text-xs font-semibold text-warm-muted"
-            )}>
+            <Link 
+              key={it.to + (it.search ? JSON.stringify(it.search) : '') + it.label} 
+              to={it.locked ? (it.to.startsWith("/community-admin") ? "/community-admin/plan" : "/dashboard/subscription") : it.to} 
+              search={it.search}
+              onClick={(e) => {
+                if (it.locked) {
+                  e.preventDefault();
+                  toast.error(`Upgrade required to unlock ${it.label}!`);
+                  navigate({ to: it.to.startsWith("/community-admin") ? "/community-admin/plan" : "/dashboard/subscription" });
+                }
+              }}
+              className={cn(
+                "relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition group",
+                active ? "bg-primary/10 text-primary animate-pulse-subtle" : "text-foreground hover:bg-sand",
+                it.locked && "text-warm-muted opacity-60 hover:bg-warm/5 cursor-pointer",
+                collapsed && "justify-center",
+                it.isSubItem && !collapsed && "pl-8 text-xs font-semibold text-warm-muted"
+              )}
+            >
               {active && <motion.span layoutId="sb-active" className="absolute left-0 top-1 bottom-1 w-1 rounded-r bg-primary" />}
               <Icon className="w-4 h-4 flex-shrink-0" />
-              {!collapsed && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="truncate">{it.label}</motion.span>}
+              {!collapsed && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="truncate">{it.locked ? `🔒 ${it.label}` : it.label}</motion.span>}
+              {it.locked && (
+                <span className="ml-auto text-warm-muted/80" title="Upgrade Required">
+                  <Lock className="w-3 h-3" />
+                </span>
+              )}
               {it.badge && it.badge > 0 ? (
                 collapsed ? (
                   <span className="absolute top-1 right-1 min-w-4 h-4 px-1 rounded-full bg-primary text-white text-[9px] font-bold flex items-center justify-center border border-white">
@@ -109,6 +129,7 @@ export function DashboardSidebar({ items, title }: { items: SidebarItem[]; title
       )}
       
       <div className="border-t border-warm mt-auto">
+
         {!collapsed && (
           <div className="p-3 border-b border-warm/30 bg-sand/30 flex items-center gap-3">
             {user?.avatar ? (
@@ -152,7 +173,7 @@ export function MobileBottomNav({ items }: { items: SidebarItem[] }) {
         const active = path === it.to;
         const Icon = it.icon;
         return (
-          <Link key={it.to} to={it.to} className={cn("flex-1 flex flex-col items-center gap-1 py-2 text-[10px]", active ? "text-primary" : "text-warm-muted")}>
+          <Link key={it.to + it.label} to={it.to} className={cn("flex-1 flex flex-col items-center gap-1 py-2 text-[10px]", active ? "text-primary" : "text-warm-muted")}>
             <Icon className="w-5 h-5" /><span className="truncate max-w-full px-1">{it.label}</span>
           </Link>
         );
@@ -166,6 +187,7 @@ export function MobileHeader({ title, items }: { title: string, items?: SidebarI
   const [detailsOpen, setDetailsOpen] = useState(false);
   const { logout, user } = useAuth();
   const path = useRouterState({ select: s => s.location.pathname });
+  const navigate = useNavigate();
 
   return (
     <>
@@ -235,12 +257,31 @@ export function MobileHeader({ title, items }: { title: string, items?: SidebarI
                     const active = path === it.to || (it.to !== "/dashboard" && it.to !== "/community-admin" && it.to !== "/admin" && path.startsWith(it.to));
                     const Icon = it.icon;
                     return (
-                      <Link key={it.to} to={it.to} onClick={() => setOpen(false)} className={cn(
-                        "flex items-center gap-3.5 px-4 py-3.5 rounded-xl text-sm font-semibold transition shadow-sm relative",
-                        active ? "bg-primary text-white shadow-primary/20 scale-[1.02]" : "bg-white border border-warm text-foreground hover:bg-sand"
-                      )}>
+                      <Link 
+                        key={it.to + it.label} 
+                        to={it.locked ? (it.to.startsWith("/community-admin") ? "/community-admin/plan" : "/dashboard/subscription") : it.to} 
+                        search={it.search} 
+                        onClick={(e) => {
+                          setOpen(false);
+                          if (it.locked) {
+                            e.preventDefault();
+                            toast.error(`Upgrade required to unlock ${it.label}!`);
+                            navigate({ to: it.to.startsWith("/community-admin") ? "/community-admin/plan" : "/dashboard/subscription" });
+                          }
+                        }} 
+                        className={cn(
+                          "flex items-center gap-3.5 px-4 py-3.5 rounded-xl text-sm font-semibold transition shadow-sm relative",
+                          active ? "bg-primary text-white shadow-primary/20 scale-[1.02]" : "bg-white border border-warm text-foreground hover:bg-sand",
+                          it.locked && "text-warm-muted opacity-60 hover:bg-warm/5 cursor-pointer"
+                        )}
+                      >
                         <Icon className="w-5 h-5" />
-                        {it.label}
+                        {it.locked ? `🔒 ${it.label}` : it.label}
+                        {it.locked && (
+                          <span className="ml-auto text-warm-muted/80">
+                            <Lock className="w-4 h-4" />
+                          </span>
+                        )}
                         {it.badge && it.badge > 0 && (
                           <span className={cn(
                             "ml-auto min-w-5 h-5 px-1.5 rounded-full text-[10px] font-bold flex items-center justify-center",
@@ -253,6 +294,7 @@ export function MobileHeader({ title, items }: { title: string, items?: SidebarI
                     );
                   })}
                 </nav>
+
               </motion.div>
             </>
           )}

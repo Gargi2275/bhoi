@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { CheckCircle, XCircle, Clock, FileText, AlertCircle, Building2, MapPin, User, Globe, ChevronRight } from "lucide-react";
 import { PageWrap } from "@/components/wag/PageWrap";
-import { AnimatedCard, Modal, PlanBadge, StatusBadge, AvatarCircle } from "@/components/wag/primitives";
+import { AnimatedCard, Modal, StatusBadge, AvatarCircle } from "@/components/wag/primitives";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
 
@@ -162,7 +162,7 @@ export const Route = createFileRoute("/community-admin/subsidiaries")({
                           {c.village ? `${c.village}, ` : ""}{c.district}, {c.state}
                         </td>
                         <td className="p-3">
-                          <PlanBadge plan={c.plan} />
+                          {/* Plan removed */}
                         </td>
                         <td className="p-3">
                           <StatusBadge status={c.status} />
@@ -214,7 +214,6 @@ export const Route = createFileRoute("/community-admin/subsidiaries")({
                 </div>
                 <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
                   <StatusBadge status={open.status} />
-                  <PlanBadge plan={open.plan} />
                 </div>
               </div>
 

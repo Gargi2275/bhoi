@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { 
   Heart, GraduationCap, Briefcase, MapPin, Loader2, Bookmark, Send, Inbox, 
   User, Settings, Shield, Sparkles, Check, X, Phone, Mail, Users, 
   Plus, Upload, Trash2, ArrowRight, ArrowLeft, Eye, ShieldAlert, FileText, 
-  ChevronRight, Lock, Unlock, EyeOff, Info, Camera, Sliders, Layers
+  ChevronRight, Lock, Unlock, EyeOff, Info, Camera, Sliders, Layers, AlertTriangle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { PageWrap } from "@/components/wag/PageWrap";
@@ -300,6 +300,9 @@ function MatrimonyDashboard() {
   const [selectedProfile, setSelectedProfile] = useState<any | null>(null);
   const [communities, setCommunities] = useState<any[]>([]);
   
+  const wizardPerson = peopleList.find(p => p.id === selectedPersonId);
+  const wizardPersonAge = wizardPerson?.birthdate ? calculateAge(wizardPerson.birthdate) : "N/A";
+  
   // Tab controller for bottom section
   const [activeTab, setActiveTab] = useState<string>("matches"); // matches | shortlisted | sent | received | history | admin
   
@@ -355,6 +358,7 @@ function MatrimonyDashboard() {
 
   // Modal display controllers
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [previewRole, setPreviewRole] = useState<"stranger" | "interested" | "approved" | "connected">("stranger");
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPhotosModalOpen, setIsPhotosModalOpen] = useState(false);
@@ -393,6 +397,7 @@ function MatrimonyDashboard() {
   const [filterOccupation, setFilterOccupation] = useState<string[]>([]);
   const [filterIncome, setFilterIncome] = useState<string>("Any");
   const [filterCommunityId, setFilterCommunityId] = useState<string>("Any");
+  const [showOutsidePreferences, setShowOutsidePreferences] = useState<boolean>(false);
 
   // Debounced search queries
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
@@ -411,6 +416,52 @@ function MatrimonyDashboard() {
     }, 300);
     return () => clearTimeout(handler);
   }, [filterLocation]);
+
+  // Load and refresh matches based on search query, filters, and preferences
+  const fetchFilteredMatches = async (profileId: number) => {
+    try {
+      const params = {
+        search: debouncedSearchQuery,
+        location: debouncedLocationQuery,
+        min_age: filterAge[0],
+        max_age: filterAge[1],
+        marital_status: filterMaritalStatus,
+        caste: filterCaste,
+        verified_only: filterVerifiedOnly,
+        min_height: filterHeight[0],
+        max_height: filterHeight[1],
+        income: filterIncome,
+        education: filterEducation.join(","),
+        occupation: filterOccupation.join(","),
+        community_id: filterCommunityId,
+        show_outside_preferences: showOutsidePreferences,
+      };
+      const res = await api.getMatrimonyMatches(profileId, params);
+      setMatches(res || []);
+    } catch (err) {
+      console.error("Error fetching filtered matches:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedProfile?.id) {
+      fetchFilteredMatches(selectedProfile.id);
+    }
+  }, [
+    selectedProfile?.id,
+    debouncedSearchQuery,
+    debouncedLocationQuery,
+    filterAge,
+    filterMaritalStatus,
+    filterVerifiedOnly,
+    filterCaste,
+    filterHeight,
+    filterIncome,
+    filterEducation,
+    filterOccupation,
+    filterCommunityId,
+    showOutsidePreferences,
+  ]);
 
   // Drawer details
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -435,6 +486,57 @@ function MatrimonyDashboard() {
   const sanitizeFormObject = (obj: any) => {
     if (!obj) return {};
     const sanitized = { ...obj };
+
+    // MAP backend fields to frontend fields if they are present on obj but frontend fields are not
+    if (sanitized.visibility_type && !sanitized.visibility_scope) {
+      const typeMapping: Record<string, string> = {
+        'PRIVATE': 'Private',
+        'COMMUNITY_NETWORK': 'Community Network',
+        'CUSTOM_AUDIENCE': 'Custom Audience',
+        'PLATFORM_WIDE': 'Platform Wide'
+      };
+      sanitized.visibility_scope = typeMapping[sanitized.visibility_type] || sanitized.visibility_type;
+    }
+    if (sanitized.hierarchy_scope && !sanitized.visibility_hierarchy) {
+      sanitized.visibility_hierarchy = sanitized.hierarchy_scope;
+    }
+    if (sanitized.target_communities && (!sanitized.filter_communities || sanitized.filter_communities.length === 0)) {
+      sanitized.filter_communities = sanitized.target_communities.map((c: any) => typeof c === 'object' ? c.id : c);
+    }
+    if (sanitized.selected_communities) {
+      sanitized.selected_communities = sanitized.selected_communities.map((c: any) => typeof c === 'object' ? c.id : c);
+    }
+    if (sanitized.target_castes !== undefined && sanitized.filter_castes === undefined) {
+      sanitized.filter_castes = sanitized.target_castes;
+    }
+    if (sanitized.target_subcastes !== undefined && sanitized.filter_sub_castes === undefined) {
+      sanitized.filter_sub_castes = sanitized.target_subcastes;
+    }
+    if (sanitized.target_states !== undefined && sanitized.filter_states === undefined) {
+      sanitized.filter_states = sanitized.target_states;
+    }
+    if (sanitized.target_cities !== undefined && sanitized.filter_cities === undefined) {
+      sanitized.filter_cities = sanitized.target_cities;
+    }
+    if (sanitized.target_gender !== undefined && sanitized.filter_gender === undefined) {
+      sanitized.filter_gender = sanitized.target_gender;
+    }
+    if (sanitized.target_age_min !== undefined && (sanitized.filter_min_age === undefined || sanitized.filter_min_age === null)) {
+      sanitized.filter_min_age = sanitized.target_age_min;
+    }
+    if (sanitized.target_age_max !== undefined && (sanitized.filter_max_age === undefined || sanitized.filter_max_age === null)) {
+      sanitized.filter_max_age = sanitized.target_age_max;
+    }
+    if (sanitized.target_marital_statuses !== undefined && sanitized.filter_marital_statuses === undefined) {
+      sanitized.filter_marital_statuses = sanitized.target_marital_statuses;
+    }
+    if (sanitized.target_educations !== undefined && sanitized.filter_educations === undefined) {
+      sanitized.filter_educations = sanitized.target_educations;
+    }
+    if (sanitized.target_occupations !== undefined && sanitized.filter_occupations === undefined) {
+      sanitized.filter_occupations = sanitized.target_occupations;
+    }
+
     const defaults: Record<string, any> = {
       relationship: "Self",
       marital_status: "Single",
@@ -491,6 +593,7 @@ function MatrimonyDashboard() {
       filter_occupations: "",
       aadhaar: "",
       pan: "",
+      photo_permission: "Everyone",
     };
     Object.keys(defaults).forEach(key => {
       if (sanitized[key] === null || sanitized[key] === undefined) {
@@ -584,6 +687,7 @@ function MatrimonyDashboard() {
     filter_occupations: "",
     aadhaar: "",
     pan: "",
+    photo_permission: "Everyone",
   }));
 
   const [rawPrefForm, setRawPrefForm] = useState<any>(() => sanitizePrefForm({
@@ -606,6 +710,27 @@ function MatrimonyDashboard() {
   const formData = sanitizeFormObject(rawFormData);
   const prefForm = sanitizePrefForm(rawPrefForm);
 
+  const liveImpactSummary = useMemo(() => {
+    if (!matches || matches.length === 0) return { count: 0, communities: 0, avgScore: 0 };
+    const filtered = matches.filter(p => {
+      if (prefForm.gender && p.gender !== prefForm.gender) return false;
+      if (prefForm.min_age && p.age < prefForm.min_age) return false;
+      if (prefForm.max_age && p.age > prefForm.max_age) return false;
+      if (prefForm.marital_status && prefForm.marital_status !== "Any" && p.marital_status !== prefForm.marital_status) return false;
+      if (prefForm.caste && prefForm.caste.trim().toLowerCase() !== "any" && prefForm.caste.trim()) {
+        const casteQ = prefForm.caste.toLowerCase();
+        const candCaste = (p.caste || "").toLowerCase();
+        const candSubCaste = (p.sub_caste || "").toLowerCase();
+        if (!candCaste.includes(casteQ) && !candSubCaste.includes(casteQ)) return false;
+      }
+      return true;
+    });
+    const uniqueComms = new Set(filtered.map(p => p.community_name || p.community).filter(Boolean));
+    const totalScore = filtered.reduce((sum, p) => sum + (p.match_score || 0), 0);
+    const avgScore = filtered.length > 0 ? Math.round(totalScore / filtered.length) : 0;
+    return { count: filtered.length, communities: uniqueComms.size, avgScore };
+  }, [prefForm, matches]);
+
   const setFormData = (update: any) => {
     setRawFormData((prev: any) => {
       const next = typeof update === 'function' ? update(prev) : update;
@@ -618,6 +743,30 @@ function MatrimonyDashboard() {
       const next = typeof update === 'function' ? update(prev) : update;
       return sanitizePrefForm(next);
     });
+  };
+
+  const populateFormData = (p: any) => {
+    if (!p) return;
+    setRawFormData(sanitizeFormObject(p));
+  };
+
+  const populatePrefForm = (pref: any, profileGender?: string) => {
+    setRawPrefForm(sanitizePrefForm({
+      gender: pref?.gender || (profileGender === "Bride" ? "Groom" : "Bride"),
+      min_age: pref?.min_age || 18,
+      max_age: pref?.max_age || 60,
+      caste: pref?.caste || "",
+      sub_caste: pref?.sub_caste || "",
+      education: pref?.education || "",
+      occupation: pref?.occupation || "",
+      city: pref?.city || "",
+      state: pref?.state || "",
+      country: pref?.country || "India",
+      min_height: pref?.min_height || "",
+      max_height: pref?.max_height || "",
+      marital_status: pref?.marital_status || "Any",
+      income_range: pref?.income_range || "",
+    }));
   };
 
   const [estimatedReach, setEstimatedReach] = useState<number | null>(null);
@@ -723,6 +872,10 @@ function MatrimonyDashboard() {
           incomplete_fields: incomplete.length > 0 ? incomplete : 'NONE — all complete!',
         });
         setSelectedProfile(fresh);
+        populateFormData(fresh);
+        if (fresh.partner_preference) {
+          populatePrefForm(fresh.partner_preference, fresh.gender);
+        }
         // Also update the list entry
         setMyProfiles(prev => prev.map(p => p.id === fresh.id ? fresh : p));
       }
@@ -886,8 +1039,15 @@ function MatrimonyDashboard() {
   }, [selectedPersonId, myProfiles, loading]);
 
   // Set selected profile and load statistics, preferences, and matches
-  const handleSelectProfile = async (profile: any) => {
+  const handleSelectProfile = async (profileInput: any) => {
+    let profile = profileInput;
     setSelectedProfile(profile);
+    populateFormData(profile);
+    if (profile.partner_preference) {
+      populatePrefForm(profile.partner_preference, profile.gender);
+    } else {
+      populatePrefForm(null, profile.gender);
+    }
 
     // Immediately fetch fresh data from backend so completion_percentage and status are current
     try {
@@ -900,48 +1060,20 @@ function MatrimonyDashboard() {
           debug_fields: fresh.debug_fields,
         });
         setSelectedProfile(fresh);
+        profile = fresh;
+        populateFormData(fresh);
+        if (fresh.partner_preference) {
+          populatePrefForm(fresh.partner_preference, fresh.gender);
+        }
       }
     } catch (e) {
       console.warn('[MatrimonyDashboard] fresh profile fetch failed, using cached data', e);
     }
     
-    // Default partner criteria form values
-    setPrefForm({
-      gender: profile.gender === "Bride" ? "Groom" : "Bride",
-      min_age: 18,
-      max_age: 60,
-      caste: profile.caste || "",
-      sub_caste: profile.sub_caste || "",
-      education: "",
-      occupation: "",
-      city: "",
-      state: "",
-      country: "India",
-      min_height: "",
-      max_height: "",
-      marital_status: "Any",
-      income_range: "",
-    });
-
     try {
       const prefs = await api.getMatrimonyPreferences(profile.id).catch(() => null);
       if (prefs) {
-        setPrefForm({
-          gender: prefs.gender || (profile.gender === "Bride" ? "Groom" : "Bride"),
-          min_age: prefs.min_age || 18,
-          max_age: prefs.max_age || 60,
-          caste: prefs.caste || "",
-          sub_caste: prefs.sub_caste || "",
-          education: prefs.education || "",
-          occupation: prefs.occupation || "",
-          city: prefs.city || "",
-          state: prefs.state || "",
-          country: prefs.country || "India",
-          min_height: prefs.min_height || "",
-          max_height: prefs.max_height || "",
-          marital_status: prefs.marital_status || "Any",
-          income_range: prefs.income_range || "",
-        });
+        populatePrefForm(prefs, profile.gender);
       }
 
       const stats = await api.getMatrimonyAnalytics(profile.id).catch(() => null);
@@ -950,8 +1082,25 @@ function MatrimonyDashboard() {
       const logs = await api.getMatrimonyAuditLogs(profile.id).catch(() => []);
       setAuditLogs(logs);
 
+      const matchParams = {
+        search: debouncedSearchQuery,
+        location: debouncedLocationQuery,
+        min_age: filterAge[0],
+        max_age: filterAge[1],
+        marital_status: filterMaritalStatus,
+        caste: filterCaste,
+        verified_only: filterVerifiedOnly,
+        min_height: filterHeight[0],
+        max_height: filterHeight[1],
+        income: filterIncome,
+        education: filterEducation.join(","),
+        occupation: filterOccupation.join(","),
+        community_id: filterCommunityId,
+        show_outside_preferences: showOutsidePreferences,
+      };
+
       const [matchList, wishList, sentList, recList] = await Promise.all([
-        api.getMatrimonyMatches(profile.id).catch(() => []),
+        api.getMatrimonyMatches(profile.id, matchParams).catch(() => []),
         api.getMatrimonyWishlist().catch(() => []),
         api.getMatrimonyInterestsSent().catch(() => []),
         api.getMatrimonyInterestsReceived().catch(() => []),
@@ -969,61 +1118,7 @@ function MatrimonyDashboard() {
       setSentInterests(sentList || []);
       setReceivedInterests(recList || []);
 
-      setFormData({
-        relationship: profile.relationship || "Self",
-        marital_status: profile.marital_status || "Single",
-        divorce_year: profile.divorce_year || "",
-        has_children: profile.has_children || false,
-        children_count: profile.children_count || 0,
-        children_living_with: profile.children_living_with || "",
-        year_of_loss: profile.year_of_loss || "",
-        widowed_children_info: profile.widowed_children_info || "",
-        height: profile.height || "",
-        weight: profile.weight || "",
-        complexion: profile.complexion || "Fair",
-        education: profile.education || "",
-        profession: profile.profession || "",
-        income: profile.income || "",
-        diet: profile.diet || "Vegetarian",
-        smoking: profile.smoking || "No",
-        drinking: profile.drinking || "No",
-        about: profile.about || "",
-        religion: profile.religion || "Hindu",
-        mother_tongue: profile.mother_tongue || "Gujarati",
-        languages_known: profile.languages_known || "",
-        native_place: profile.native_place || "",
-        current_address: profile.current_address || "",
-        family_type: profile.family_type || "Nuclear",
-        family_values: profile.family_values || "Traditional",
-        fathers_occupation: profile.fathers_occupation || "",
-        mothers_occupation: profile.mothers_occupation || "",
-        siblings_count: profile.siblings_count || 0,
-        visibility_scope: profile.visibility_scope || "Public",
-        contact_permission: profile.contact_permission || "Everyone Who Can View",
-        allow_interests: profile.allow_interests !== false,
-        allow_direct_chat: profile.allow_direct_chat !== false,
-        allow_phone: profile.allow_phone !== false,
-        allow_whatsapp: profile.allow_whatsapp !== false,
-        allow_email: profile.allow_email !== false,
-        contact_name: profile.contact_name || profile.name || "",
-        contact_relation: profile.contact_relation || "Self",
-        contact_phone: profile.contact_phone || "",
-        contact_whatsapp: profile.contact_whatsapp || "",
-        contact_email: profile.contact_email || "",
-        visibility_hierarchy: profile.visibility_hierarchy || "My Community",
-        selected_communities: profile.selected_communities || [],
-        filter_communities: profile.filter_communities || [],
-        filter_castes: profile.filter_castes || "",
-        filter_sub_castes: profile.filter_sub_castes || "",
-        filter_states: profile.filter_states || "",
-        filter_cities: profile.filter_cities || "",
-        filter_gender: profile.filter_gender || "Everyone",
-        filter_min_age: profile.filter_min_age || 18,
-        filter_max_age: profile.filter_max_age || 60,
-        filter_marital_statuses: profile.filter_marital_statuses || "",
-        filter_educations: profile.filter_educations || "",
-        filter_occupations: profile.filter_occupations || "",
-      });
+      populateFormData(profile);
 
     } catch (e) {
       console.error("Failed loading selected profile metrics", e);
@@ -1117,23 +1212,15 @@ function MatrimonyDashboard() {
       await api.acceptMatrimonyInterest(interestId);
       toast.success(`Accepted interest from ${name}!`);
       if (selectedProfile) {
-        const [recList, sentList, matchList, stats] = await Promise.all([
+        const [recList, sentList, stats] = await Promise.all([
           api.getMatrimonyInterestsReceived(),
           api.getMatrimonyInterestsSent(),
-          api.getMatrimonyMatches(selectedProfile.id),
           api.getMatrimonyAnalytics(selectedProfile.id)
         ]);
-        console.log("[MatrimonyDashboard] recommended matches refresh after accept:", {
-          matchingMode: MATCHING_MODE,
-          selectedProfileId: selectedProfile.id,
-          returnedCount: matchList?.length || 0,
-          returnedProfileIds: (matchList || []).map((p: any) => p.id),
-          clientFiltersBypassed: IS_OPEN_TEST_MATCHING,
-        });
         setReceivedInterests(recList || []);
         setSentInterests(sentList || []);
-        setMatches(matchList || []);
         setAnalytics(stats);
+        await fetchFilteredMatches(selectedProfile.id);
       }
     } catch (err: any) {
       toast.error(err.message || "Failed to accept interest");
@@ -1366,7 +1453,7 @@ function MatrimonyDashboard() {
     const temp = list[photoIndex];
     list[photoIndex] = list[target];
     list[target] = temp;
-    const photoIds = list.map((p: any) => p.id);
+const photoIds = list.map((p: any) => p.id);
     try {
       await api.reorderMatrimonyPhotos(selectedProfile.id, photoIds);
       toast.success("Photo display order updated");
@@ -1378,294 +1465,637 @@ function MatrimonyDashboard() {
   };
 
   const renderVisibilityAndAudienceSection = () => {
+    const scope = formData.visibility_scope;
+
+    const SearchableCommunitySelect = ({
+      selectedIds,
+      onChange,
+      placeholder = "Select communities..."
+    }: {
+      selectedIds: number[];
+      onChange: (ids: number[]) => void;
+      placeholder?: string;
+    }) => {
+      const [isOpen, setIsOpen] = useState(false);
+      const [search, setSearch] = useState("");
+
+      const filteredComms = communities.filter((c: any) => {
+        const isApproved = c.status === 'Approved' || c.status === 'Active';
+        if (!isApproved) return false;
+        if (!search.trim()) return true;
+        return c.name.toLowerCase().includes(search.toLowerCase()) ||
+               (c.caste && c.caste.toLowerCase().includes(search.toLowerCase()));
+      });
+
+      const selectedComms = communities.filter((c: any) => selectedIds.includes(c.id));
+
+      const toggleSelect = (id: number) => {
+        if (selectedIds.includes(id)) {
+          onChange(selectedIds.filter(x => x !== id));
+        } else {
+          onChange([...selectedIds, id]);
+        }
+      };
+
+      return (
+        <div className="relative w-full">
+          <div
+            onClick={() => setIsOpen(!isOpen)}
+            className="min-h-[42px] w-full px-3.5 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold flex flex-wrap gap-1.5 items-center cursor-pointer hover:border-gold transition-all"
+          >
+            {selectedComms.length === 0 ? (
+              <span className="text-warm-muted">{placeholder}</span>
+            ) : (
+              selectedComms.map((c: any) => (
+                <span
+                  key={c.id}
+                  className="inline-flex items-center gap-1 bg-gold/10 text-gold px-2 py-0.5 rounded-full text-[10px] font-bold border border-gold/20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(c.id);
+                  }}
+                >
+                  {c.name}
+                  <span className="hover:text-red-500 cursor-pointer text-xs leading-none">×</span>
+                </span>
+              ))
+            )}
+            <span className="ml-auto text-warm-muted text-[10px]">▼</span>
+          </div>
+
+          {isOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+              <div className="absolute left-0 right-0 mt-1.5 border border-warm rounded-2xl bg-surface shadow-xl z-50 p-2.5 max-h-64 flex flex-col gap-2">
+                <input
+                  type="text"
+                  placeholder="Search community..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full px-3 py-1.5 border border-warm/60 rounded-xl bg-sand/10 text-xs focus:outline-none focus:border-gold"
+                />
+
+                <div className="overflow-y-auto space-y-1 pr-1 flex-1">
+                  {filteredComms.length === 0 ? (
+                    <p className="text-[11px] text-warm-muted text-center py-2">No approved communities found</p>
+                  ) : (
+                    filteredComms.map((c: any) => {
+                      const indent = c.level > 1 ? `${(c.level - 1) * 12}px` : "0px";
+                      const isChecked = selectedIds.includes(c.id);
+                      return (
+                        <div
+                          key={c.id}
+                          style={{ paddingLeft: indent }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(c.id);
+                          }}
+                          className={`flex items-center gap-2 p-1.5 rounded-lg text-xs font-semibold cursor-pointer hover:bg-sand/15 select-none transition-all ${isChecked ? "bg-gold/5 text-gold" : "text-foreground"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="w-3.5 h-3.5 accent-gold cursor-pointer"
+                          />
+                          <span>{c.level > 1 ? "└ " : ""}{c.name}{c.caste ? ` (${c.caste})` : ""}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    };
+
+    const reachCards = [
+      {
+        id: "Private",
+        label: "PRIVATE",
+        desc: "Maximum Privacy",
+        summary: "Visible only after approval.",
+        reach: "0 Profiles",
+        communities: "0 Communities",
+        bullets: ["Hidden from search", "Hidden from recommendations", "Unlocked only when you accept interest"],
+        theme: "border-slate-300 bg-slate-50/5 hover:border-slate-400",
+        activeTheme: "border-slate-600 bg-slate-100/10 shadow-lg ring-2 ring-slate-400",
+        textColor: "text-slate-600",
+        icon: "🔒",
+      },
+      {
+        id: "Community Network",
+        label: "COMMUNITY ONLY",
+        desc: "Within selected communities",
+        summary: "Visible only inside selected communities.",
+        reach: `${estimatedReach ?? 0} Profiles`,
+        communities: `${estimatedCommunities ?? 0} Communities`,
+        bullets: ["Visible within hierarchy", "Appears in community search", "Restricted to selected network"],
+        theme: "border-warm bg-surface hover:border-gold",
+        activeTheme: "border-gold bg-gold/5 shadow-lg ring-2 ring-gold/40",
+        textColor: "text-gold",
+        icon: "🏘️",
+      },
+      {
+        id: "Custom Audience",
+        label: "TARGETED MATCHES",
+        desc: "Matching partner criteria only",
+        summary: "Visible only to matching partner criteria.",
+        reach: `${estimatedReach ?? 0} Profiles`,
+        communities: `${estimatedMatches ?? 0} Match Score Eligible`,
+        bullets: ["Visible only to matching filters", "Advanced target demographics", "Restricted profile access"],
+        theme: "border-warm bg-surface hover:border-amber-500",
+        activeTheme: "border-amber-500 bg-amber-50/5 shadow-lg ring-2 ring-amber-400",
+        textColor: "text-amber-600",
+        icon: "🎯",
+      },
+      {
+        id: "Platform Wide",
+        label: "OPEN TO ALL",
+        desc: "Platform-wide reach",
+        summary: "Visible platform-wide.",
+        reach: "5,000+ Profiles",
+        communities: "12 Communities",
+        bullets: ["Visible across all platform", "Maximum match probability", "Broadest audience reach"],
+        theme: "border-warm bg-surface hover:border-emerald-500",
+        activeTheme: "border-emerald-500 bg-emerald-50/5 shadow-lg ring-2 ring-emerald-400",
+        textColor: "text-emerald-600",
+        icon: "🌐",
+      },
+    ];
+
     return (
       <div className="space-y-6">
-        <div>
-          <h5 className="text-xs font-bold text-gold uppercase tracking-wider mb-3">Profile Visibility Type</h5>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {[
-              {
-                id: "Private",
-                label: "Private",
-                desc: "Profile visible only to approved matches. Hidden from search results.",
-                icon: Lock,
-              },
-              {
-                id: "Community Network",
-                label: "Community Network",
-                desc: "Profile visible within selected community network hierarchy.",
-                icon: Users,
-              },
-              {
-                id: "Custom Audience",
-                label: "Custom Audience",
-                desc: "Profile visible only to members matching selected criteria.",
-                icon: Sliders,
-              },
-              {
-                id: "Platform Wide",
-                label: "Platform Wide",
-                desc: "Visible across all eligible communities on the platform.",
-                icon: Layers,
-              },
-            ].map((item) => {
-              const isSelected = formData.visibility_scope === item.id;
-              const Icon = item.icon;
+
+        {/* ── SECTION 1: PROFILE REACH ── */}
+        <div className="rounded-2xl border border-warm/60 overflow-hidden bg-white shadow-sm">
+          <div className="px-4 py-3 bg-sand/20 border-b border-warm/40 flex items-center gap-2">
+            <span className="text-base">👁️</span>
+            <div>
+              <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Step 1 — Profile Reach</p>
+              <p className="text-[10px] text-warm-muted">Choose your profile's discoverability mode.</p>
+            </div>
+          </div>
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {reachCards.map((m) => {
+              const isSelected = scope === m.id;
               return (
-                <div
-                  key={item.id}
-                  onClick={() => setFormData({ ...formData, visibility_scope: item.id })}
-                  className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col justify-between h-28 select-none ${
-                    isSelected
-                      ? "border-gold bg-gold/5 shadow-xs"
-                      : "border-warm/50 bg-surface hover:bg-sand/20"
-                  }`}
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    const typeMappingReverse: Record<string, string> = {
+                      'Private': 'PRIVATE',
+                      'Community Network': 'COMMUNITY_NETWORK',
+                      'Custom Audience': 'CUSTOM_AUDIENCE',
+                      'Platform Wide': 'PLATFORM_WIDE'
+                    };
+                    setFormData({ 
+                      ...formData, 
+                      visibility_scope: m.id,
+                      visibility_type: typeMappingReverse[m.id] || m.id
+                    });
+                  }}
+                  className={`text-left p-4 border-2 rounded-2xl cursor-pointer transition-all select-none flex flex-col justify-between min-h-[220px] ${isSelected ? m.activeTheme : m.theme}`}
                 >
-                  <div className="flex items-center justify-between">
-                    <Icon className={`w-4 h-4 ${isSelected ? "text-gold" : "text-warm-muted"}`} />
-                    {isSelected && (
-                      <span className="w-2 h-2 rounded-full bg-gold" />
-                    )}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xl">{m.icon}</span>
+                      {isSelected ? (
+                        <span className="inline-flex items-center gap-1 bg-gold/15 text-gold px-2 py-0.5 rounded-full text-[9px] font-black uppercase">Active</span>
+                      ) : (
+                        <span className="w-2.5 h-2.5 rounded-full bg-warm/30" />
+                      )}
+                    </div>
+                    <div>
+                      <p className={`text-xs font-black uppercase tracking-wide ${isSelected ? m.textColor : "text-foreground"}`}>{m.label}</p>
+                      <p className="text-[10px] font-semibold text-warm-muted leading-tight mt-0.5">{m.desc}</p>
+                    </div>
+                    <p className="text-[10px] text-foreground font-semibold leading-relaxed pt-1 border-t border-warm/25">{m.summary}</p>
+                    <ul className="space-y-1 pt-1.5">
+                      {m.bullets.map((bullet, idx) => (
+                        <li key={idx} className="text-[9px] text-warm-muted flex items-start gap-1">
+                          <span className="text-gold shrink-0">✓</span>
+                          <span>{bullet}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <div className="mt-2">
-                    <div className="text-xs font-bold text-foreground">{item.label}</div>
-                    <div className="text-[10px] text-warm-muted leading-tight mt-0.5">{item.desc}</div>
+                  
+                  <div className="mt-4 pt-2 border-t border-warm/30 flex items-center justify-between text-[10px] font-bold">
+                    <span className="text-foreground">{m.reach}</span>
+                    <span className="text-warm-muted">{m.communities}</span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
         </div>
 
-        {/* Community Network Configuration */}
-        {formData.visibility_scope === "Community Network" && (
-          <div className="p-4 bg-sand/10 border border-warm rounded-2xl space-y-4">
-            <h5 className="text-xs font-bold text-gold uppercase tracking-wider">Hierarchy Selection</h5>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* ── SECTION 2: AUDIENCE TARGETING DETAILED SETTINGS ── */}
+        {scope === "Community Network" && (
+          <div className="rounded-2xl border border-gold/40 overflow-hidden bg-white shadow-sm">
+            <div className="px-4 py-3 bg-gold/5 border-b border-gold/20 flex items-center gap-2">
+              <span className="text-base">🏘️</span>
               <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Hierarchy Range</label>
-                <select
-                  value={formData.visibility_hierarchy}
-                  onChange={(e) => setFormData({ ...formData, visibility_hierarchy: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                >
-                  <option value="My Community">My Community</option>
-                  <option value="Parent Community">Parent Community</option>
-                  <option value="Child Communities">Child Communities</option>
-                  <option value="Entire Hierarchy Chain">Entire Hierarchy Chain</option>
-                  <option value="Selected Communities">Selected Communities (Custom)</option>
-                </select>
+                <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Community Visibility Scope</p>
+                <p className="text-[10px] text-warm-muted">Control exactly who within the community network can see your profile.</p>
               </div>
             </div>
-
-            {formData.visibility_hierarchy === "Selected Communities" && (
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Select Communities</label>
-                <div className="mt-2 border border-warm rounded-xl p-3 max-h-40 overflow-y-auto bg-surface space-y-2">
-                  {communities.map((c: any) => {
-                    const isChecked = (formData.selected_communities || []).includes(c.id);
-                    return (
-                      <label key={c.id} className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            let updated = [...(formData.selected_communities || [])];
-                            if (e.target.checked) {
-                              updated.push(c.id);
-                            } else {
-                              updated = updated.filter((id: number) => id !== c.id);
-                            }
-                            setFormData({ ...formData, selected_communities: updated });
-                          }}
-                          className="w-4 h-4 accent-gold"
-                        />
-                        <span>{c.name} {c.caste ? `(${c.caste})` : ''}</span>
-                      </label>
-                    );
-                  })}
-                </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[
+                  { value: "My Community", label: "My Community Only", desc: "Only exact same community" },
+                  { value: "Parent Community", label: "Parent Communities", desc: "My community + parent level" },
+                  { value: "Child Communities", label: "Child Communities", desc: "My community + sub-communities" },
+                  { value: "Entire Hierarchy Chain", label: "Entire Community Tree", desc: "Full tree — ancestors + descendants" },
+                  { value: "Selected Communities", label: "Selected Communities (Custom)", desc: "Manually pick communities" },
+                ].map((opt) => (
+                  <label key={opt.value} className={`flex items-start gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all select-none ${formData.visibility_hierarchy === opt.value ? "border-gold bg-gold/5" : "border-warm/40 hover:bg-sand/20"}`}>
+                    <input type="radio" name="hierarchy_scope" value={opt.value} checked={formData.visibility_hierarchy === opt.value} onChange={() => setFormData({ ...formData, visibility_hierarchy: opt.value })} className="mt-0.5 accent-gold" />
+                    <div>
+                      <p className="text-xs font-bold text-foreground">{opt.label}</p>
+                      <p className="text-[10px] text-warm-muted mt-0.5 leading-snug">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
               </div>
-            )}
-          </div>
-        )}
 
-        {/* Dynamic Targeting Rules Section */}
-        {formData.visibility_scope !== "Private" && (
-          <div className="p-4 bg-sand/10 border border-warm rounded-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-warm/40 pb-2">
-              <h5 className="text-xs font-bold text-gold uppercase tracking-wider">Audience Targeting Rules</h5>
-              {formData.visibility_scope === "Platform Wide" && (
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">Platform-wide Filters Enabled</span>
+              {formData.visibility_hierarchy === "Selected Communities" && (
+                <div className="pt-2">
+                  <label className="block text-xs font-bold text-warm-muted uppercase mb-1.5">Select Approved Communities</label>
+                  <SearchableCommunitySelect
+                    selectedIds={formData.selected_communities || []}
+                    onChange={(ids) => setFormData({ ...formData, selected_communities: ids })}
+                    placeholder="Search and select communities..."
+                  />
+                </div>
               )}
             </div>
+          </div>
+        )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        {scope === "Custom Audience" && (
+          <div className="rounded-2xl border border-amber-400/40 overflow-hidden bg-white shadow-sm">
+            <div className="px-4 py-3 bg-amber-50/5 border-b border-amber-200/40 flex items-center gap-2">
+              <span className="text-base">🎯</span>
               <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Gender</label>
-                <select
-                  value={formData.filter_gender}
-                  onChange={(e) => setFormData({ ...formData, filter_gender: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                >
-                  <option value="Everyone">Everyone</option>
-                  <option value="Male Only">Male Only</option>
-                  <option value="Female Only">Female Only</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Age Range</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="18"
-                    max="70"
-                    value={formData.filter_min_age}
-                    onChange={(e) => setFormData({ ...formData, filter_min_age: parseInt(e.target.value) || 18 })}
-                    className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold text-center"
-                  />
-                  <span className="text-xs font-bold text-warm-muted">to</span>
-                  <input
-                    type="number"
-                    min="18"
-                    max="70"
-                    value={formData.filter_max_age}
-                    onChange={(e) => setFormData({ ...formData, filter_max_age: parseInt(e.target.value) || 60 })}
-                    className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold text-center"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Caste Filters</label>
-                <input
-                  type="text"
-                  value={formData.filter_castes}
-                  onChange={(e) => setFormData({ ...formData, filter_castes: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Patel, Brahmin (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Sub-Caste Filters</label>
-                <input
-                  type="text"
-                  value={formData.filter_sub_castes}
-                  onChange={(e) => setFormData({ ...formData, filter_sub_castes: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Kadva, Leva (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">State Filters</label>
-                <input
-                  type="text"
-                  value={formData.filter_states}
-                  onChange={(e) => setFormData({ ...formData, filter_states: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Gujarat, Maharashtra (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">City Filters</label>
-                <input
-                  type="text"
-                  value={formData.filter_cities}
-                  onChange={(e) => setFormData({ ...formData, filter_cities: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Ahmedabad, Surat (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Marital Statuses</label>
-                <input
-                  type="text"
-                  value={formData.filter_marital_statuses}
-                  onChange={(e) => setFormData({ ...formData, filter_marital_statuses: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Single, Divorced (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Educations</label>
-                <input
-                  type="text"
-                  value={formData.filter_educations}
-                  onChange={(e) => setFormData({ ...formData, filter_educations: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. B.Tech, MBA (comma-separated)"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Occupations</label>
-                <input
-                  type="text"
-                  value={formData.filter_occupations}
-                  onChange={(e) => setFormData({ ...formData, filter_occupations: e.target.value })}
-                  className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold"
-                  placeholder="e.g. Software, Business (comma-separated)"
-                />
-              </div>
-
-              <div className="sm:col-span-2 md:col-span-3">
-                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Specific Communities Only</label>
-                <div className="mt-1 border border-warm rounded-xl p-3 max-h-32 overflow-y-auto bg-surface space-y-2">
-                  {communities.map((c: any) => {
-                    const isChecked = (formData.filter_communities || []).includes(c.id);
-                    return (
-                      <label key={c.id} className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            let updated = [...(formData.filter_communities || [])];
-                            if (e.target.checked) {
-                              updated.push(c.id);
-                            } else {
-                              updated = updated.filter((id: number) => id !== c.id);
-                            }
-                            setFormData({ ...formData, filter_communities: updated });
-                          }}
-                          className="w-4 h-4 accent-gold"
-                        />
-                        <span>{c.name} {c.caste ? `(${c.caste})` : ''}</span>
-                      </label>
-                    );
-                  })}
-                </div>
+                <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Targeted Matching Demographics</p>
+                <p className="text-[10px] text-warm-muted">Set target filters. Only users matching ALL criteria will see your profile.</p>
               </div>
             </div>
-
-            {/* Live Audience Reach Meter */}
-            <div className="p-4 bg-gold/5 border border-gold/20 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 mt-4">
-              <div className="space-y-1 text-center sm:text-left">
-                <h6 className="text-xs font-bold text-gold uppercase tracking-wider">Live Audience Reach Preview</h6>
-                <p className="text-[10px] text-warm-muted leading-tight">Estimates eligible matching profiles across target scopes.</p>
-              </div>
-              <div className="flex items-center gap-3 bg-surface border border-warm px-4 py-2.5 rounded-xl shadow-xs min-w-[180px] justify-center">
-                {loadingReach ? (
-                  <Loader2 className="w-5 h-5 text-gold animate-spin" />
-                ) : (
-                  <Users className="w-5 h-5 text-gold" />
-                )}
-                <div className="text-center">
-                  <div className="text-sm font-extrabold text-foreground">
-                    {loadingReach ? "Calculating..." : `${estimatedReach ?? 0}`}
-                    <div className="text-xs text-muted-foreground">Communities: {estimatedCommunities ?? 0} · Matches: {estimatedMatches ?? 0}</div>
-                  </div>
-                  <div className="text-[9px] text-warm-muted uppercase font-bold tracking-wider">Eligible Reach</div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Gender Focus</label>
+                  <select value={formData.filter_gender || "Everyone"} onChange={e => setFormData({ ...formData, filter_gender: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold">
+                    <option value="Everyone">Everyone</option>
+                    <option value="Groom">Grooms Only</option>
+                    <option value="Bride">Brides Only</option>
+                  </select>
                 </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Min Age Allowed</label>
+                  <input type="number" min="18" max="70" value={formData.filter_min_age ?? ""} onChange={e => setFormData({ ...formData, filter_min_age: e.target.value === "" ? "" : parseInt(e.target.value) })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold text-center" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Max Age Allowed</label>
+                  <input type="number" min="18" max="70" value={formData.filter_max_age ?? ""} onChange={e => setFormData({ ...formData, filter_max_age: e.target.value === "" ? "" : parseInt(e.target.value) })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold text-center" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Marital Status (comma-separated)</label>
+                  <input type="text" value={formData.filter_marital_statuses || ""} onChange={e => setFormData({ ...formData, filter_marital_statuses: e.target.value })} placeholder="e.g. Single, Divorced" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">State Target</label>
+                  <input type="text" value={formData.filter_states || ""} onChange={e => setFormData({ ...formData, filter_states: e.target.value })} placeholder="e.g. Gujarat, Maharashtra" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">City Target</label>
+                  <input type="text" value={formData.filter_cities || ""} onChange={e => setFormData({ ...formData, filter_cities: e.target.value })} placeholder="e.g. Ahmedabad, Surat" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Caste List</label>
+                  <input type="text" value={formData.filter_castes || ""} onChange={e => setFormData({ ...formData, filter_castes: e.target.value })} placeholder="e.g. Patel, Brahmin" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Sub-Caste List</label>
+                  <input type="text" value={formData.filter_sub_castes || ""} onChange={e => setFormData({ ...formData, filter_sub_castes: e.target.value })} placeholder="e.g. Kadva, Leva" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-warm-muted uppercase mb-1">Education Requirements</label>
+                  <input type="text" value={formData.filter_educations || ""} onChange={e => setFormData({ ...formData, filter_educations: e.target.value })} placeholder="e.g. B.Tech, MBA" className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
+                </div>
+              </div>
+              <div className="pt-2">
+                <label className="block text-xs font-bold text-warm-muted uppercase mb-1.5">Communities (Multi-select)</label>
+                <SearchableCommunitySelect
+                  selectedIds={formData.filter_communities || []}
+                  onChange={(ids) => setFormData({ ...formData, filter_communities: ids })}
+                  placeholder="Select targeted communities..."
+                />
               </div>
             </div>
           </div>
         )}
+
+        {/* ── SECTION 3: CONTACT SHARING POLICY ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-warm/60 overflow-hidden bg-white shadow-sm p-4 space-y-4">
+            <div className="flex items-center gap-2 border-b border-warm/20 pb-2">
+              <span className="text-base">📞</span>
+              <div>
+                <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Step 2 — Contact Sharing Policy</p>
+                <p className="text-[10px] text-warm-muted">Controls Phone, WhatsApp, Email, Guardian info, Family info, Address.</p>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="block text-[10px] font-extrabold text-warm-muted uppercase tracking-wide">When should contact details be revealed?</label>
+              <div className="flex flex-col gap-2.5">
+                {[
+                  { value: "Never", label: "Never Share", desc: "Keep all contacts hidden. Manual unlock requested individually." },
+                  { value: "After Interest Approval", label: "After Interest Approval", desc: "Unlock contact automatically once interest request is accepted." },
+                  { value: "After Mutual Interest", label: "After Mutual Interest", desc: "Reveal contact details only when both profiles express mutual interest." },
+                  { value: "After Family Approval", label: "After Family Approval", desc: "Reveal only after family or guardian explicitly approves." },
+                  { value: "Immediately", label: "Immediately", desc: "Reveal contact immediately to any user who is allowed to view your profile." },
+                ].map((opt) => (
+                  <label key={opt.value} className={`flex items-start gap-2.5 p-2.5 border rounded-xl cursor-pointer hover:bg-sand/10 transition-all ${formData.contact_permission === opt.value ? "border-gold bg-gold/5" : "border-warm/40"}`}>
+                    <input
+                      type="radio"
+                      name="contact_permission"
+                      value={opt.value}
+                      checked={formData.contact_permission === opt.value}
+                      onChange={() => setFormData({ ...formData, contact_permission: opt.value })}
+                      className="mt-0.5 accent-gold"
+                    />
+                    <div>
+                      <p className="text-xs font-bold text-foreground">{opt.label}</p>
+                      <p className="text-[9px] text-warm-muted mt-0.5 leading-snug">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ── SECTION 4: PHOTO PRIVACY ── */}
+          <div className="rounded-2xl border border-warm/60 overflow-hidden bg-white shadow-sm p-4 space-y-4">
+            <div className="flex items-center gap-2 border-b border-warm/20 pb-2">
+              <span className="text-base">📸</span>
+              <div>
+                <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Step 3 — Photo Privacy</p>
+                <p className="text-[10px] text-warm-muted">Control who can view your profile & album photos.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-[10px] font-extrabold text-warm-muted uppercase tracking-wide">Photo visibility rules</label>
+              <div className="flex flex-col gap-2.5">
+                {[
+                  { value: "Nobody", label: "Nobody", desc: "Photos are completely hidden from all other members." },
+                  { value: "Blurred Preview Only", label: "Blurred Preview Only", desc: "Show a blurred preview of your photo; request access to reveal." },
+                  { value: "After Interest Approval", label: "After Interest Approval", desc: "Reveal photos once you approve their interest request." },
+                  { value: "After Mutual Interest", label: "After Mutual Interest", desc: "Reveal only if there is a mutual match/accepted request." },
+                  { value: "Everyone", label: "Everyone (Public)", desc: "Visible to anyone who is allowed to view your profile." },
+                ].map((opt) => (
+                  <label key={opt.value} className={`flex items-start gap-2.5 p-2.5 border rounded-xl cursor-pointer hover:bg-sand/10 transition-all ${formData.photo_permission === opt.value ? "border-gold bg-gold/5" : "border-warm/40"}`}>
+                    <input
+                      type="radio"
+                      name="photo_permission"
+                      value={opt.value}
+                      checked={formData.photo_permission === opt.value}
+                      onChange={() => setFormData({ ...formData, photo_permission: opt.value })}
+                      className="mt-0.5 accent-gold"
+                    />
+                    <div>
+                      <p className="text-xs font-bold text-foreground">{opt.label}</p>
+                      <p className="text-[9px] text-warm-muted mt-0.5 leading-snug">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── SECTION 5: LIVE PROFILE PREVIEW ── */}
+        <div className="rounded-2xl border border-warm/60 overflow-hidden bg-white shadow-sm">
+          <div className="px-4 py-3 bg-sand/20 border-b border-warm/40 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-base">👁️‍🗨️</span>
+              <div>
+                <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Step 4 — Live Profile Preview Simulator</p>
+                <p className="text-[10px] text-warm-muted">See exactly what other users will see based on your current settings.</p>
+              </div>
+            </div>
+            <div className="flex gap-1 bg-sand/20 p-0.5 rounded-lg border border-warm/40">
+              {[
+                { id: "stranger", label: "Strangers (NEW)" },
+                { id: "interested", label: "Interested (SENT)" },
+                { id: "approved", label: "Approved" },
+                { id: "connected", label: "Connected (MUTUAL)" },
+              ].map((role) => (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => setPreviewRole(role.id as any)}
+                  className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${previewRole === role.id ? "bg-gold text-white shadow-sm" : "text-warm-muted hover:text-foreground"}`}
+                >
+                  {role.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-4 bg-sand/5 grid grid-cols-1 md:grid-cols-12 gap-4">
+            {/* Simulator Left Pane: Card Render Mock */}
+            <div className="md:col-span-4 border border-warm/40 rounded-2xl bg-white p-4 flex flex-col items-center text-center gap-3 relative overflow-hidden shadow-sm">
+              <div className="w-24 h-24 rounded-full border border-warm/60 bg-sand/10 flex items-center justify-center relative overflow-hidden">
+                {/* Photo Blur Logic */}
+                {(() => {
+                  const policy = formData.photo_permission;
+                  let isBlurred = false;
+                  if (previewRole === "stranger") {
+                    isBlurred = policy !== "Everyone";
+                  } else if (previewRole === "interested") {
+                    isBlurred = policy === "Nobody" || policy === "Blurred Preview Only" || policy === "After Interest Approval" || policy === "After Mutual Interest";
+                  } else if (previewRole === "approved") {
+                    isBlurred = policy === "Nobody" || policy === "Blurred Preview Only" || policy === "After Mutual Interest";
+                  } else if (previewRole === "connected") {
+                    isBlurred = policy === "Nobody" || policy === "Blurred Preview Only";
+                  }
+
+                  if (isBlurred) {
+                    return (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-sand/40 backdrop-blur-md">
+                        <span className="text-lg">🔒</span>
+                        <span className="text-[8px] font-extrabold text-gold uppercase tracking-wider mt-0.5">Blurred Preview</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-50">
+                      <span className="text-2xl">👤</span>
+                      <span className="text-[8px] font-extrabold text-emerald-600 uppercase tracking-wider mt-0.5">Photo Visible</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div>
+                <p className="text-xs font-black text-foreground">{formData.contact_name || "Anjali Patel"}</p>
+                <p className="text-[10px] text-warm-muted">{wizardPersonAge} Years • Female</p>
+                <p className="text-[10px] text-warm-muted font-bold mt-1">Ahmedabad, Gujarat</p>
+              </div>
+
+              {/* Status Tags */}
+              <div className="w-full space-y-1.5 mt-2 pt-2 border-t border-warm/25">
+                {/* Contact Badge mock */}
+                {(() => {
+                  const policy = formData.contact_permission;
+                  let visible = false;
+                  if (previewRole === "stranger") {
+                    visible = policy === "Immediately";
+                  } else if (previewRole === "interested") {
+                    visible = policy === "Immediately";
+                  } else if (previewRole === "approved") {
+                    visible = policy === "Immediately" || policy === "After Interest Approval";
+                  } else if (previewRole === "connected") {
+                    visible = policy !== "Never";
+                  }
+
+                  if (visible) {
+                    return <span className="block w-full text-center bg-emerald-100/50 border border-emerald-500/20 text-emerald-600 rounded-lg py-1 text-[9px] font-black uppercase">🟢 Contact Available</span>;
+                  }
+                  if (previewRole === "stranger" || previewRole === "interested") {
+                    return <span className="block w-full text-center bg-slate-100 border border-slate-500/20 text-slate-600 rounded-lg py-1 text-[9px] font-black uppercase">🔒 Contact Hidden</span>;
+                  }
+                  return <span className="block w-full text-center bg-amber-100/50 border border-amber-500/20 text-amber-600 rounded-lg py-1 text-[9px] font-black uppercase">🟡 Unlocks After Approval</span>;
+                })()}
+
+                {/* Family Badge mock */}
+                {(() => {
+                  const familyVisible = previewRole === "connected" || previewRole === "approved";
+                  if (familyVisible) {
+                    return <span className="block w-full text-center bg-emerald-100/50 border border-emerald-500/20 text-emerald-600 rounded-lg py-1 text-[9px] font-black uppercase">🟢 Family Details Available</span>;
+                  }
+                  return <span className="block w-full text-center bg-slate-100 border border-slate-500/20 text-slate-600 rounded-lg py-1 text-[9px] font-black uppercase">🔒 Family Details Hidden</span>;
+                })()}
+              </div>
+            </div>
+
+            {/* Simulator Right Pane: Field-level audit details */}
+            <div className="md:col-span-8 border border-warm/40 rounded-2xl bg-white p-4 space-y-3 relative overflow-hidden shadow-sm">
+              <p className="text-[10px] font-extrabold text-foreground uppercase tracking-wider pb-1.5 border-b border-warm/20">Data Field Serialization Audit</p>
+              
+              <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                {[
+                  {
+                    name: "Full Name",
+                    value: "Anjali Patel",
+                    show: true,
+                    rule: "Always visible"
+                  },
+                  {
+                    name: "Age & Gender",
+                    value: `${wizardPersonAge} Years • Female`,
+                    show: true,
+                    rule: "Always visible"
+                  },
+                  {
+                    name: "City & State",
+                    value: "Ahmedabad, Gujarat",
+                    show: true,
+                    rule: "Always visible"
+                  },
+                  {
+                    name: "Education Qualification",
+                    value: formData.education || "M.S. Computer Science",
+                    show: previewRole !== "stranger",
+                    rule: "Hidden for Strangers; Visible to Interested and above"
+                  },
+                  {
+                    name: "Occupation/Profession",
+                    value: formData.profession || "Software Engineer",
+                    show: previewRole !== "stranger",
+                    rule: "Hidden for Strangers; Visible to Interested and above"
+                  },
+                  {
+                    name: "Annual Income",
+                    value: formData.income ? `₹ ${formData.income}` : "₹ 15-20 Lakhs",
+                    show: previewRole === "connected" || previewRole === "approved",
+                    rule: "Hidden for Strangers/Interested; Visible to Approved and above"
+                  },
+                  {
+                    name: "Contact Mobile",
+                    value: formData.contact_phone || "+91 98765 43210",
+                    show: (() => {
+                      const policy = formData.contact_permission;
+                      if (previewRole === "stranger") return policy === "Immediately";
+                      if (previewRole === "interested") return policy === "Immediately";
+                      if (previewRole === "approved") return policy === "Immediately" || policy === "After Interest Approval";
+                      if (previewRole === "connected") return policy !== "Never";
+                      return false;
+                    })(),
+                    rule: `Governed by Contact Sharing Policy: ${formData.contact_permission}`
+                  },
+                  {
+                    name: "Family Member Name",
+                    value: formData.contact_name || "Ramesh Shah",
+                    show: previewRole === "connected" || previewRole === "approved",
+                    rule: "Hidden for Strangers/Interested; Unlocks on Approval/Connected"
+                  },
+                  {
+                    name: "Father's Occupation",
+                    value: formData.fathers_occupation || "Business Owner",
+                    show: previewRole === "connected" || previewRole === "approved",
+                    rule: "Hidden for Strangers/Interested; Unlocks on Approval/Connected"
+                  }
+                ].map((f, idx) => (
+                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between text-xs py-1.5 border-b border-warm/10 last:border-0">
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-foreground">{f.name}</p>
+                      <p className="text-[9px] text-warm-muted">{f.rule}</p>
+                    </div>
+                    <div className="text-right mt-1 sm:mt-0 font-mono">
+                      {f.show ? (
+                        <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] font-bold">{f.value}</span>
+                      ) : (
+                        <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold">null (Hidden)</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── SECTION 6: VERIFICATION & TRUST ── */}
+        <div className="rounded-2xl border border-warm/60 overflow-hidden bg-white shadow-sm">
+          <div className="px-4 py-3 bg-sand/20 border-b border-warm/40 flex items-center gap-2">
+            <span className="text-base">🛡️</span>
+            <div>
+              <p className="text-xs font-extrabold text-foreground uppercase tracking-wider">Step 5 — Verification & Trust</p>
+              <p className="text-[10px] text-warm-muted">Identity documents used for profile verification only. Never shared.</p>
+            </div>
+          </div>
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Aadhaar Number</label>
+              <input type="text" value={formData.aadhaar} onChange={e => setFormData({ ...formData, aadhaar: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="12-digit Aadhaar" maxLength={12} />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-warm-muted uppercase mb-1">PAN Number</label>
+              <input type="text" value={formData.pan} onChange={e => setFormData({ ...formData, pan: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="PAN Card ID" maxLength={10} />
+            </div>
+          </div>
+        </div>
+
       </div>
     );
   };
@@ -1734,7 +2164,7 @@ function MatrimonyDashboard() {
     });
 
     setPrefForm({
-      gender: person.gender === "Male" ? "Bride" : "Groom",
+      gender: (person.gender === "Male" || person.gender === "Groom") ? "Bride" : "Groom",
       min_age: 18,
       max_age: 60,
       caste: person.caste || "",
@@ -1868,15 +2298,7 @@ function MatrimonyDashboard() {
       // Refresh everything from backend
       console.log("[EditProfileForm] Refreshing active profile details...");
       await refreshProfile(selectedProfile.id);
-      const updatedMatches = await api.getMatrimonyMatches(selectedProfile.id).catch(() => []);
-      console.log("[MatrimonyDashboard] recommended matches refresh after profile update:", {
-        matchingMode: MATCHING_MODE,
-        selectedProfileId: selectedProfile.id,
-        returnedCount: updatedMatches?.length || 0,
-        returnedProfileIds: (updatedMatches || []).map((p: any) => p.id),
-        clientFiltersBypassed: IS_OPEN_TEST_MATCHING,
-      });
-      setMatches(updatedMatches);
+      await fetchFilteredMatches(selectedProfile.id);
     } catch (err: any) {
       console.error("[EditProfileForm] Error updating profile:", err);
       toast.error(err.message || "Failed to update profile");
@@ -1895,15 +2317,7 @@ function MatrimonyDashboard() {
 
       // Re-fetch profile so partner_preference and status update
       await refreshProfile(selectedProfile.id);
-      const updatedMatches = await api.getMatrimonyMatches(selectedProfile.id).catch(() => []);
-      console.log("[MatrimonyDashboard] recommended matches refresh after preferences update:", {
-        matchingMode: MATCHING_MODE,
-        selectedProfileId: selectedProfile.id,
-        returnedCount: updatedMatches?.length || 0,
-        returnedProfileIds: (updatedMatches || []).map((p: any) => p.id),
-        clientFiltersBypassed: IS_OPEN_TEST_MATCHING,
-      });
-      setMatches(updatedMatches);
+      await fetchFilteredMatches(selectedProfile.id);
     } catch (err: any) {
       toast.error(err.message || "Failed to save partner preferences");
     } finally {
@@ -1973,70 +2387,7 @@ function MatrimonyDashboard() {
   };
 
   // Recommended matches filtering logic
-  const filteredMatches = matches.filter(p => {
-    if (debouncedSearchQuery) {
-      const q = debouncedSearchQuery.toLowerCase();
-      const nameMatch = p.name?.toLowerCase().includes(q);
-      const casteMatch = p.caste?.toLowerCase().includes(q) || p.sub_caste?.toLowerCase().includes(q);
-      const eduMatch = p.education?.toLowerCase().includes(q);
-      const locMatch = p.city?.toLowerCase().includes(q) || p.state?.toLowerCase().includes(q);
-      if (!nameMatch && !casteMatch && !eduMatch && !locMatch) return false;
-    }
-    
-    // Age Filter
-    if (p.age < filterAge[0] || p.age > filterAge[1]) return false;
-    
-    // Marital Status Filter
-    if (filterMaritalStatus !== "Any" && p.marital_status !== filterMaritalStatus) return false;
-    
-    // Verified Status Filter
-    if (filterVerifiedOnly && !p.is_verified) return false;
-    
-    // Caste Filter
-    if (filterCaste !== "Any" && p.caste !== filterCaste) return false;
-    
-    // Location Filter
-    if (debouncedLocationQuery) {
-      const locQ = debouncedLocationQuery.toLowerCase();
-      const stateMatch = p.state?.toLowerCase().includes(locQ);
-      const cityMatch = p.city?.toLowerCase().includes(locQ);
-      if (!stateMatch && !cityMatch) return false;
-    }
-
-    // Height Filter
-    const inches = parseHeightToInches(p.height);
-    if (inches > 0) {
-      if (inches < filterHeight[0] || inches > filterHeight[1]) return false;
-    }
-
-    // Education Level Filter (Multi-select)
-    if (filterEducation.length > 0) {
-      const pEdu = p.education?.toLowerCase() || "";
-      const matched = filterEducation.some(edu => {
-        const target = edu.toLowerCase();
-        if (target === "below matric") return pEdu.includes("below") || pEdu.includes("matric") && !pEdu.includes("post");
-        return pEdu.includes(target);
-      });
-      if (!matched) return false;
-    }
-
-    // Occupation Type Filter (Multi-select)
-    if (filterOccupation.length > 0) {
-      const pOcc = p.profession?.toLowerCase() || "";
-      const matched = filterOccupation.some(occ => pOcc.includes(occ.toLowerCase()));
-      if (!matched) return false;
-    }
-
-    // Income Range Filter
-    if (!checkIncomeMatch(p.income, filterIncome)) return false;
-
-    // Community / Sub-community Filter
-    if (filterCommunityId !== "Any") {
-      if (p.community?.toString() !== filterCommunityId) return false;
-    }
-
-    return true;
-  });
+  const filteredMatches = matches;
 
   const getUniqueCastes = () => {
     const vals = matches.map(p => p.caste).filter(Boolean);
@@ -2426,6 +2777,12 @@ function MatrimonyDashboard() {
                   </button>
                   <button
                     onClick={() => {
+                      if (selectedProfile) {
+                        populateFormData(selectedProfile);
+                        if (selectedProfile.partner_preference) {
+                          populatePrefForm(selectedProfile.partner_preference, selectedProfile.gender);
+                        }
+                      }
                       setEditModalStep(1);
                       setIsEditModalOpen(true);
                     }}
@@ -2440,7 +2797,12 @@ function MatrimonyDashboard() {
                     <Camera className="w-4 h-4 text-warm-muted" /> Upload Photos
                   </button>
                   <button
-                    onClick={() => setIsPreferencesModalOpen(true)}
+                    onClick={() => {
+                      if (selectedProfile) {
+                        populatePrefForm(selectedProfile.partner_preference, selectedProfile.gender);
+                      }
+                      setIsPreferencesModalOpen(true);
+                    }}
                     className="py-2.5 px-3 bg-surface hover:bg-sand border border-warm rounded-xl text-xs font-bold text-foreground flex items-center justify-center gap-1.5 transition-all"
                   >
                     <Sliders className="w-4 h-4 text-warm-muted" /> Preferences
@@ -2521,6 +2883,12 @@ function MatrimonyDashboard() {
                       {(!selectedProfile || selectedProfile.status === "Draft") && (
                         <button
                           onClick={() => {
+                            if (selectedProfile) {
+                              populateFormData(selectedProfile);
+                              if (selectedProfile.partner_preference) {
+                                populatePrefForm(selectedProfile.partner_preference, selectedProfile.gender);
+                              }
+                            }
                             setEditModalStep(1);
                             setIsEditModalOpen(true);
                           }}
@@ -2552,6 +2920,7 @@ function MatrimonyDashboard() {
                         setFilterOccupation([]);
                         setFilterIncome("Any");
                         setFilterCommunityId("Any");
+                        setShowOutsidePreferences(false);
                       }} 
                       className="text-[10px] text-gold font-bold hover:underline"
                     >
@@ -2559,6 +2928,20 @@ function MatrimonyDashboard() {
                     </button>
                   </div>
                   <div className="space-y-4 text-xs font-semibold text-warm-muted">
+                    {/* Show profiles outside my preferences toggle */}
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-sand/20 border border-warm/40">
+                      <div className="flex flex-col mr-2">
+                        <span className="font-bold text-xs text-warm-muted">Show profiles outside preferences</span>
+                        <span className="text-[9px] text-warm-muted/70 font-normal">Bypasses mandatory Gender/Age/Caste/Marital Status filters</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={showOutsidePreferences}
+                        onChange={e => setShowOutsidePreferences(e.target.checked)}
+                        className="w-4 h-4 text-gold border-warm rounded-md focus:ring-gold cursor-pointer"
+                      />
+                    </div>
+
                     {/* Keyword search */}
                     <div>
                       <label className="block mb-1 font-bold">Keyword search</label>
@@ -2783,12 +3166,19 @@ function MatrimonyDashboard() {
                           >
                             <div className="h-[180px] w-full relative bg-sand/20 overflow-hidden shrink-0">
                               {primaryPhoto ? (
-                                <img 
-                                  src={resolvePhotoUrl(primaryPhoto)} 
-                                  alt={p.name} 
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                                  loading="lazy" 
-                                />
+                                <>
+                                  <img 
+                                    src={resolvePhotoUrl(primaryPhoto)} 
+                                    alt={p.name} 
+                                    className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") ? "blur-md saturate-50" : ""}`} 
+                                    loading="lazy" 
+                                  />
+                                  {typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") && (
+                                    <div className="absolute inset-0 bg-black/25 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+                                      <span className="text-[9px] bg-black/75 text-white px-2 py-0.5 rounded-full font-bold border border-white/20 flex items-center gap-1 shadow-sm"><EyeOff className="w-2.5 h-2.5 text-gold shrink-0" /> Blurred Preview</span>
+                                    </div>
+                                  )}
+                                </>
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500 to-amber-600 text-white font-bold text-2xl font-ui">
                                   {initials}
@@ -2921,12 +3311,19 @@ function MatrimonyDashboard() {
                         >
                           <div className="h-[180px] w-full relative bg-sand/20 overflow-hidden shrink-0">
                             {primaryPhoto ? (
-                              <img 
-                                src={resolvePhotoUrl(primaryPhoto)} 
-                                alt={p.name} 
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                                loading="lazy" 
-                              />
+                              <>
+                                <img 
+                                  src={resolvePhotoUrl(primaryPhoto)} 
+                                  alt={p.name} 
+                                  className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") ? "blur-md saturate-50" : ""}`} 
+                                  loading="lazy" 
+                                />
+                                {typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") && (
+                                  <div className="absolute inset-0 bg-black/25 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+                                    <span className="text-[9px] bg-black/75 text-white px-2 py-0.5 rounded-full font-bold border border-white/20 flex items-center gap-1 shadow-sm"><EyeOff className="w-2.5 h-2.5 text-gold shrink-0" /> Blurred Preview</span>
+                                  </div>
+                                )}
+                              </>
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500 to-amber-600 text-white font-bold text-2xl font-ui">
                                 {initials}
@@ -3059,12 +3456,19 @@ function MatrimonyDashboard() {
                         >
                           <div className="h-[180px] w-full relative bg-sand/20 overflow-hidden shrink-0">
                             {primaryPhoto ? (
-                              <img 
-                                src={resolvePhotoUrl(primaryPhoto)} 
-                                alt={p.name} 
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                                loading="lazy" 
-                              />
+                              <>
+                                <img 
+                                  src={resolvePhotoUrl(primaryPhoto)} 
+                                  alt={p.name} 
+                                  className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") ? "blur-md saturate-50" : ""}`} 
+                                  loading="lazy" 
+                                />
+                                {typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") && (
+                                  <div className="absolute inset-0 bg-black/25 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+                                    <span className="text-[9px] bg-black/75 text-white px-2 py-0.5 rounded-full font-bold border border-white/20 flex items-center gap-1 shadow-sm"><EyeOff className="w-2.5 h-2.5 text-gold shrink-0" /> Blurred Preview</span>
+                                  </div>
+                                )}
+                              </>
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500 to-amber-600 text-white font-bold text-2xl font-ui">
                                 {initials}
@@ -3196,12 +3600,19 @@ function MatrimonyDashboard() {
                         >
                           <div className="h-[180px] w-full relative bg-sand/20 overflow-hidden shrink-0">
                             {primaryPhoto ? (
-                              <img 
-                                src={resolvePhotoUrl(primaryPhoto)} 
-                                alt={p.name} 
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                                loading="lazy" 
-                              />
+                              <>
+                                <img 
+                                  src={resolvePhotoUrl(primaryPhoto)} 
+                                  alt={p.name} 
+                                  className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") ? "blur-md saturate-50" : ""}`} 
+                                  loading="lazy" 
+                                />
+                                {typeof primaryPhoto === "string" && primaryPhoto.includes("blurred=true") && (
+                                  <div className="absolute inset-0 bg-black/25 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+                                    <span className="text-[9px] bg-black/75 text-white px-2 py-0.5 rounded-full font-bold border border-white/20 flex items-center gap-1 shadow-sm"><EyeOff className="w-2.5 h-2.5 text-gold shrink-0" /> Blurred Preview</span>
+                                  </div>
+                                )}
+                              </>
                             ) : (
                               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-amber-500 to-amber-600 text-white font-bold text-2xl font-ui">
                                 {initials}
@@ -3522,6 +3933,57 @@ function MatrimonyDashboard() {
             {editModalStep === 1 && (
               <div className="space-y-4">
                 <h4 className="font-bold text-sm text-gold border-b border-warm/40 pb-1">Basic Biological Details</h4>
+                
+                {/* Synced Fields Info Block */}
+                <div className="p-4 bg-amber-50/15 dark:bg-zinc-900/30 border border-gold-light/40 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between border-b border-gold-light/20 pb-1.5">
+                    <span className="text-[10px] text-gold uppercase font-bold flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5" /> Synced From Member Profile
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Full Name</span>
+                      <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                        <span className="truncate">{selectedProfile?.name || "N/A"}</span>
+                        <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                      </div>
+                      <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Gender</span>
+                      <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                        <span>{selectedProfile?.gender || "N/A"}</span>
+                        <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                      </div>
+                      <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Date Of Birth</span>
+                      <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                        <span>{selectedProfile?.dob || "N/A"}</span>
+                        <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                      </div>
+                      <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Age</span>
+                      <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                        <span>{selectedProfile?.age || "N/A"} Years</span>
+                      </div>
+                      <span className="text-[9px] text-gold font-bold block mt-0.5">Auto Calculated</span>
+                    </div>
+                    <div className="col-span-2 sm:col-span-4 border-t border-warm/40 pt-2 mt-1">
+                      <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Community</span>
+                      <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                        <span>{selectedProfile?.community_name || "N/A"}</span>
+                        <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                      </div>
+                      <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Marital Status</label>
@@ -3779,7 +4241,7 @@ function MatrimonyDashboard() {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Sub-Caste</label>
-                    <input type="text" value={prefForm.sub_caste} onChange={e => setPrefForm({ ...prefForm, sub_caste: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" />
+                    <input type="text" value={rawPrefForm.sub_caste ?? ""} onChange={e => setRawPrefForm((prev: any) => ({ ...prev, sub_caste: e.target.value }))} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Samaj, Patidar (optional)" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Education Level Accepted</label>
@@ -3792,6 +4254,20 @@ function MatrimonyDashboard() {
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred State</label>
                     <input type="text" value={prefForm.state} onChange={e => setPrefForm({ ...prefForm, state: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Gujarat" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred City</label>
+                    <input type="text" value={prefForm.city} onChange={e => setPrefForm({ ...prefForm, city: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Rajkot" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Income Range Accepted</label>
+                    <select value={prefForm.income_range} onChange={e => setPrefForm({ ...prefForm, income_range: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none">
+                      <option value="">Any Income</option>
+                      <option value="0-3L">0 - 3 Lakhs</option>
+                      <option value="3-5L">3 - 5 Lakhs</option>
+                      <option value="5-10L">5 - 10 Lakhs</option>
+                      <option value="10L+">10 Lakhs +</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Marital Status Accepted</label>
@@ -3809,70 +4285,8 @@ function MatrimonyDashboard() {
 
             {/* Tab 7: Privacy */}
             {editModalStep === 7 && (
-              <div className="space-y-4">
-                <h4 className="font-bold text-sm text-gold border-b border-warm/40 pb-1">Visibility Scope & Privacy Controls</h4>
-                
+              <div className="space-y-2">
                 {renderVisibilityAndAudienceSection()}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-warm/40">
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Show Contact details to</label>
-                    <select value={formData.contact_permission} onChange={e => setFormData({ ...formData, contact_permission: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold">
-                      <option value="Everyone Who Can View">Everyone Who Can View</option>
-                      <option value="Verified Members Only">Verified Members Only</option>
-                      <option value="Premium Members Only">Premium Members Only</option>
-                      <option value="Same Community Only">Same Community Only</option>
-                      <option value="Nobody">Nobody (Unlock via Requests)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Aadhaar card number (For Verification)</label>
-                    <input type="text" value={formData.aadhaar} onChange={e => setFormData({ ...formData, aadhaar: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="12 Digit Aadhaar Number" />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">PAN card ID (For Verification)</label>
-                    <input type="text" value={formData.pan} onChange={e => setFormData({ ...formData, pan: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="PAN Number" />
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-warm/40 space-y-3">
-                  <h5 className="text-xs font-bold text-gold uppercase tracking-wider">Contact Communication Privacy Checklists</h5>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 font-semibold text-xs text-warm-muted">
-                    <label className="flex items-center gap-2 select-none cursor-pointer">
-                      <input type="checkbox" checked={formData.allow_phone} onChange={e => setFormData({ ...formData, allow_phone: e.target.checked })} className="w-4 h-4 accent-gold" /> Allow Direct Phone Calling
-                    </label>
-                    <label className="flex items-center gap-2 select-none cursor-pointer">
-                      <input type="checkbox" checked={formData.allow_whatsapp} onChange={e => setFormData({ ...formData, allow_whatsapp: e.target.checked })} className="w-4 h-4 accent-gold" /> Allow WhatsApp Messaging
-                    </label>
-                    <label className="flex items-center gap-2 select-none cursor-pointer">
-                      <input type="checkbox" checked={formData.allow_email} onChange={e => setFormData({ ...formData, allow_email: e.target.checked })} className="w-4 h-4 accent-gold" /> Allow Email Exchange
-                    </label>
-                  </div>
-                </div>
-
-                <h4 className="font-bold text-sm text-gold border-b border-warm/40 pb-1 pt-4">Guardians Exchange Information</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Contact Name</label>
-                    <input type="text" value={formData.contact_name} onChange={e => setFormData({ ...formData, contact_name: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Relation to member</label>
-                    <input type="text" value={formData.contact_relation} onChange={e => setFormData({ ...formData, contact_relation: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="e.g. Father, Self, Brother" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Contact Mobile Phone</label>
-                    <input type="text" value={formData.contact_phone} onChange={e => setFormData({ ...formData, contact_phone: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">WhatsApp number</label>
-                    <input type="text" value={formData.contact_whatsapp} onChange={e => setFormData({ ...formData, contact_whatsapp: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Contact Email Address</label>
-                    <input type="email" value={formData.contact_email} onChange={e => setFormData({ ...formData, contact_email: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" />
-                  </div>
-                </div>
               </div>
             )}
 
@@ -4084,6 +4498,23 @@ function MatrimonyDashboard() {
         {selectedProfile && (
           <div className="space-y-4 font-ui text-foreground">
             <h4 className="font-bold text-xs uppercase tracking-wider text-warm-muted border-b border-warm/40 pb-1">Specify expectations for matching</h4>
+            
+            {/* Live Preference Impact Summary */}
+            <div className="bg-gold/10 border border-gold/30 rounded-xl p-3.5 flex items-center justify-between gap-4 font-ui text-xs font-semibold text-warm-muted animate-fadeIn">
+              <div className="flex flex-col items-center flex-1 text-center border-r border-warm/30 last:border-r-0">
+                <span className="text-[10px] uppercase font-bold text-warm-muted/70 mb-0.5">Matching Profiles</span>
+                <span className="text-sm font-bold text-gold">{liveImpactSummary.count}</span>
+              </div>
+              <div className="flex flex-col items-center flex-1 text-center border-r border-warm/30 last:border-r-0">
+                <span className="text-[10px] uppercase font-bold text-warm-muted/70 mb-0.5">Communities Covered</span>
+                <span className="text-sm font-bold text-gold">{liveImpactSummary.communities}</span>
+              </div>
+              <div className="flex flex-col items-center flex-1 text-center">
+                <span className="text-[10px] uppercase font-bold text-warm-muted/70 mb-0.5">Avg Match Score</span>
+                <span className="text-sm font-bold text-gold">{liveImpactSummary.avgScore}%</span>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-semibold">
               <div>
                 <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred Gender</label>
@@ -4116,7 +4547,7 @@ function MatrimonyDashboard() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Target Sub-Caste</label>
-                <input type="text" value={prefForm.sub_caste} onChange={e => setPrefForm({ ...prefForm, sub_caste: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" />
+                <input type="text" value={rawPrefForm.sub_caste ?? ""} onChange={e => setRawPrefForm((prev: any) => ({ ...prev, sub_caste: e.target.value }))} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Samaj, Patidar (optional)" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Education Level Accepted</label>
@@ -4129,6 +4560,20 @@ function MatrimonyDashboard() {
               <div>
                 <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred State</label>
                 <input type="text" value={prefForm.state} onChange={e => setPrefForm({ ...prefForm, state: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Gujarat" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred City</label>
+                <input type="text" value={prefForm.city} onChange={e => setPrefForm({ ...prefForm, city: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none" placeholder="e.g. Rajkot" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Income Range Accepted</label>
+                <select value={prefForm.income_range} onChange={e => setPrefForm({ ...prefForm, income_range: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface focus:outline-none">
+                  <option value="">Any Income</option>
+                  <option value="0-3L">0 - 3 Lakhs</option>
+                  <option value="3-5L">3 - 5 Lakhs</option>
+                  <option value="5-10L">5 - 10 Lakhs</option>
+                  <option value="10L+">10 Lakhs +</option>
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Marital Status Accepted</label>
@@ -4186,12 +4631,46 @@ function MatrimonyDashboard() {
               <div className="space-y-4">
                 <h4 className="font-bold text-sm text-gold border-b border-warm/40 pb-1">Step 1: Basic Details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="sm:col-span-2 p-4 bg-amber-50/15 dark:bg-zinc-900/30 border border-gold-light/40 rounded-2xl">
-                    <span className="text-[10px] text-gold uppercase font-bold block mb-1">Source Auto Syncing</span>
-                    <p className="text-xs text-warm-muted leading-relaxed font-semibold">
-                      Profile is configured for: <span className="text-foreground">{peopleList.find(p => p.id === selectedPersonId)?.name}</span> ({peopleList.find(p => p.id === selectedPersonId)?.relation}). 
-                      Details like Name, Gender, Birth Date, and Community are synced from the platform database and cannot be modified.
-                    </p>
+                  {/* Synced Fields Info Block */}
+                  <div className="sm:col-span-2 p-4 bg-amber-50/15 dark:bg-zinc-900/30 border border-gold-light/40 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between border-b border-gold-light/20 pb-1.5">
+                      <span className="text-[10px] text-gold uppercase font-bold flex items-center gap-1">
+                        <Lock className="w-3.5 h-3.5" /> Synced From Member Profile
+                      </span>
+                    </div>
+                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div>
+                        <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Full Name</span>
+                        <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                          <span className="truncate">{wizardPerson?.name || "N/A"}</span>
+                          <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                        </div>
+                        <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Gender</span>
+                        <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                          <span>{wizardPerson?.gender || "N/A"}</span>
+                          <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                        </div>
+                        <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Date Of Birth</span>
+                        <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                          <span>{wizardPerson?.birthdate || "N/A"}</span>
+                          <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light shrink-0" /></span>
+                        </div>
+                        <span className="text-[9px] text-warm-muted block mt-0.5">Synced From Member Profile</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-warm-muted uppercase block font-bold mb-0.5">Age</span>
+                        <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                          <span>{wizardPersonAge} Years</span>
+                        </div>
+                        <span className="text-[9px] text-gold font-bold block mt-0.5">Auto Calculated</span>
+                      </div>
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Marital Status *</label>
@@ -4407,7 +4886,7 @@ function MatrimonyDashboard() {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred Sub-Caste</label>
-                    <input type="text" value={prefForm.sub_caste} onChange={e => setPrefForm({ ...prefForm, sub_caste: e.target.value })} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="e.g. Samaj" />
+                    <input type="text" value={rawPrefForm.sub_caste ?? ""} onChange={e => setRawPrefForm((prev: any) => ({ ...prev, sub_caste: e.target.value }))} className="w-full px-3 py-2 border border-warm rounded-xl bg-surface text-xs font-semibold" placeholder="e.g. Samaj (optional)" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-warm-muted uppercase mb-1">Preferred Education Level</label>
@@ -4665,16 +5144,27 @@ function MatrimonyDashboard() {
                 </div>
                 <div className="flex-1 text-center sm:text-left min-w-0">
                   <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap">
-                    <h4 className="text-xl font-bold text-foreground truncate">{drawerProfile.name}</h4>
+                    <h4 className="text-xl font-bold text-foreground truncate flex items-center gap-1.5">
+                      {drawerProfile.name}
+                      <span title="Synced From Member Profile"><Lock className="w-3.5 h-3.5 text-gold-light/70" /></span>
+                    </h4>
                     {drawerProfile.is_verified && (
                       <span className="bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                         <Shield className="w-2.5 h-2.5 fill-teal-500/10" /> Verified
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-warm-muted mt-1 font-semibold">
-                    {drawerProfile.age} Years • {drawerProfile.marital_status} • {drawerProfile.gender}
-                  </p>
+                  <div className="text-xs text-warm-muted mt-1 font-semibold flex items-center justify-center sm:justify-start gap-1 flex-wrap">
+                    <span>{drawerProfile.age} Years</span>
+                    <span className="text-[9px] bg-gold/10 text-gold px-1.5 py-0.2 rounded font-bold uppercase mr-1">Auto Calculated</span>
+                    <span>•</span>
+                    <span>{drawerProfile.marital_status}</span>
+                    <span>•</span>
+                    <span className="flex items-center gap-1">
+                      {drawerProfile.gender}
+                      <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light/60" /></span>
+                    </span>
+                  </div>
                   <p className="text-xs text-warm-muted mt-0.5 font-semibold flex items-center justify-center sm:justify-start gap-1">
                     <MapPin className="w-3.5 h-3.5 text-gold" />
                     {drawerProfile.city || "Not Disclosed"}, {drawerProfile.state || "Not Disclosed"}
@@ -4692,7 +5182,7 @@ function MatrimonyDashboard() {
 
               {/* Sticky Tab Navigation Bar */}
               <div className="sticky top-0 z-40 bg-background/95 backdrop-blur-md border-b border-warm flex gap-1 pt-1 overflow-x-auto scrollbar-none">
-                {["About", "Background & Lifestyle", "Partner Criteria", "Photos"].map(dt => (
+                {["About", "Compatibility & Fit", "Background & Lifestyle", "Partner Criteria", "Photos"].map(dt => (
                   <button
                     key={dt}
                     onClick={() => setDrawerTab(dt)}
@@ -4705,6 +5195,78 @@ function MatrimonyDashboard() {
                 ))}
               </div>
 
+              {/* Tab Panel: Compatibility & Fit */}
+              {drawerTab === "Compatibility & Fit" && (
+                <div className="space-y-4 animate-fadeIn">
+                  {/* Score circle and intro */}
+                  <div className="flex flex-col sm:flex-row items-center gap-4 bg-sand/15 dark:bg-zinc-900/10 border border-warm/40 p-4 rounded-xl">
+                    <div className="relative w-20 h-20 flex items-center justify-center rounded-full bg-gold/10 border-2 border-gold/30">
+                      <span className="text-xl font-bold text-gold">{drawerProfile.match_score || 0}%</span>
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs uppercase tracking-wider text-warm-muted mb-1">Mutual Compatibility Score</h4>
+                      <p className="text-[11px] text-warm-muted/90 leading-relaxed font-medium">
+                        This score is calculated dynamically based on your partner preference expectations and their stated lifestyle and background criteria.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Positive Match Reasons */}
+                  {drawerProfile.match_reasons && drawerProfile.match_reasons.length > 0 && (
+                    <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl space-y-2.5">
+                      <h5 className="font-bold text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-1">
+                        <Check className="w-4 h-4" /> Areas of Strong Agreement
+                      </h5>
+                      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-semibold text-warm-muted">
+                        {drawerProfile.match_reasons.map((reason: string, idx: number) => (
+                          <li key={idx} className="flex items-start gap-1.5">
+                            <span className="text-emerald-600 dark:text-emerald-400 mt-0.5">✓</span>
+                            <span>{reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Negative Match Reasons / Gaps */}
+                  {drawerProfile.match_negatives && drawerProfile.match_negatives.length > 0 && (
+                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5">
+                      <h5 className="font-bold text-amber-600 dark:text-amber-400 text-xs flex items-center gap-1">
+                        <AlertTriangle className="w-4 h-4" /> Criteria Gaps / Mismatches
+                      </h5>
+                      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-semibold text-warm-muted">
+                        {drawerProfile.match_negatives.map((neg: string, idx: number) => (
+                          <li key={idx} className="flex items-start gap-1.5">
+                            <span className="text-amber-600 dark:text-amber-400 mt-0.5">⚠️</span>
+                            <span>{neg}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Detailed breakdown category-by-category */}
+                  {drawerProfile.compatibility_breakdown && (
+                    <div className="p-4 bg-sand/10 dark:bg-zinc-900/10 border border-warm/40 rounded-xl space-y-3">
+                      <h5 className="font-bold text-warm-muted uppercase tracking-wider text-[10px] border-b border-warm/40 pb-1.5">
+                        Preference Rule Matrix Breakdown
+                      </h5>
+                      <div className="space-y-2">
+                        {Object.entries(drawerProfile.compatibility_breakdown).map(([category, val]: [string, any]) => {
+                          const statusColor = val.status === 'Match' ? 'text-emerald-600' : val.status === 'Gap' ? 'text-amber-600' : 'text-warm-muted/70';
+                          return (
+                            <div key={category} className="flex justify-between items-center text-xs font-semibold py-1 border-b border-warm/20 last:border-0">
+                              <span className="capitalize">{category.replace('_', ' ')}</span>
+                              <span className={`${statusColor}`}>{val.message}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Tab Panel: About */}
               {drawerTab === "About" && (
                 <div className="space-y-4 animate-fadeIn">
@@ -4716,6 +5278,13 @@ function MatrimonyDashboard() {
                   </div>
                   
                   <div className="grid grid-cols-2 gap-4 text-xs font-semibold border-t border-warm pt-4">
+                    <div>
+                      <span className="text-[10px] uppercase font-gold text-warm-muted block mb-0.5">Date Of Birth</span>
+                      <div className="flex items-center gap-1.5 text-foreground/85">
+                        <span>{drawerProfile.dob || "N/A"}</span>
+                        <span title="Synced From Member Profile"><Lock className="w-3 h-3 text-gold-light/70" /></span>
+                      </div>
+                    </div>
                     <div>
                       <span className="text-[10px] uppercase font-gold text-warm-muted block mb-0.5">Caste / Sub-Caste</span>
                       <span className="text-foreground/85">{drawerProfile.caste || "Ahir"} / {drawerProfile.sub_caste || "Samaj"}</span>
@@ -4883,6 +5452,15 @@ function MatrimonyDashboard() {
                               <p className="text-xs text-zinc-300 mt-1 px-4">Contact details & private photos are hidden until interest request is mutually accepted.</p>
                             </div>
                           </div>
+                        ) : drawerProfile.photos[activePhotoIndex]?.is_blurred || (drawerProfile.photos[activePhotoIndex]?.image && drawerProfile.photos[activePhotoIndex].image.includes("blurred=true")) ? (
+                          <div className="w-full h-full relative animate-fadeIn">
+                            <img src={resolvePhotoUrl(drawerProfile.photos[activePhotoIndex].image)} alt="" className="w-full h-full object-cover blur-2xl saturate-50" />
+                            <div className="absolute inset-0 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center text-white text-center p-4">
+                              <EyeOff className="w-10 h-10 text-gold mb-2 animate-pulse" />
+                              <p className="text-sm font-bold">Blurred Preview Only</p>
+                              <p className="text-xs text-zinc-300 mt-1 px-4">This member has enabled blurred photo previews. Send interest and connect to request unblurred access.</p>
+                            </div>
+                          </div>
                         ) : (
                           <>
                             <img 
@@ -4938,10 +5516,15 @@ function MatrimonyDashboard() {
                               activePhotoIndex === idx ? "border-gold scale-105 shadow-sm" : "border-warm/50 opacity-60 hover:opacity-100"
                             }`}
                           >
-                            <img src={resolvePhotoUrl(ph.image)} alt="" className="w-full h-full object-cover" />
+                            <img src={resolvePhotoUrl(ph.image)} alt="" className={`w-full h-full object-cover ${ph.is_blurred || (ph.image && ph.image.includes("blurred=true")) ? "blur-xs saturate-50" : ""}`} />
                             {ph.is_private && !isMutual && (
                               <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white">
                                 <Lock className="w-3.5 h-3.5 text-gold" />
+                              </div>
+                            )}
+                            {!(ph.is_private && !isMutual) && (ph.is_blurred || (ph.image && ph.image.includes("blurred=true"))) && (
+                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white">
+                                <EyeOff className="w-3.5 h-3.5 text-gold" />
                               </div>
                             )}
                           </button>
@@ -4965,21 +5548,31 @@ function MatrimonyDashboard() {
                   </div>
                   <div className="space-y-1">
                     <h5 className="text-xs font-bold text-foreground">Contact & Family Details Exchange</h5>
-                    {isMutual ? (
+                    {drawerProfile.contact_email || drawerProfile.contact_phone || drawerProfile.contact_whatsapp ? (
                       <div className="space-y-1 text-sm font-semibold text-foreground/90 pt-1">
-                        <div className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-gold" /> {drawerProfile.contact_email || "N/A"}</div>
-                        <div className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-gold" /> {drawerProfile.contact_phone || "N/A"}</div>
+                        {drawerProfile.contact_email && (
+                          <div className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-gold" /> {drawerProfile.contact_email}</div>
+                        )}
+                        {drawerProfile.contact_phone && (
+                          <div className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-gold" /> {drawerProfile.contact_phone}</div>
+                        )}
                         {drawerProfile.contact_whatsapp && (
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded font-bold">WhatsApp</span>
                             {drawerProfile.contact_whatsapp}
                           </div>
                         )}
-                        <div className="text-[10px] text-warm-muted mt-1.5">Contact Person: {drawerProfile.contact_name} ({drawerProfile.contact_relation})</div>
+                        {drawerProfile.contact_name && (
+                          <div className="text-[10px] text-warm-muted mt-1.5">
+                            Contact Person: {drawerProfile.contact_name} {drawerProfile.contact_relation ? `(${drawerProfile.contact_relation})` : ''}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <p className="text-xs text-warm-muted mt-1 leading-relaxed">
-                        Contact details are protected by privacy rules. Send interest and connect. Once accepted by both partners, contact information will unlock.
+                        {isMutual 
+                          ? "Contact details are set to private (Never Share) by this member."
+                          : "Contact details are protected by privacy rules. Send interest and connect. Once accepted by both partners, contact information will unlock."}
                       </p>
                     )}
                   </div>

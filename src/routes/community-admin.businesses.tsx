@@ -202,7 +202,7 @@ export const Route = createFileRoute("/community-admin/businesses")({
         fd.append("website", form.website);
         fd.append("status", form.status);
         fd.append("featured", String(form.featured));
-        fd.append("community", user?.communityId || "");
+        fd.append("community", String(user?.communityId || ""));
 
         fd.append("hours", JSON.stringify(form.hours));
         fd.append("socials", JSON.stringify(form.socials));
@@ -442,7 +442,7 @@ export const Route = createFileRoute("/community-admin/businesses")({
           open={open}
           onClose={() => setOpen(false)}
           title={editTarget ? `Modify: ${editTarget.name}` : "Create Business Directory Listing"}
-          className="max-w-2xl"
+          size="lg"
         >
           {/* Tabs header */}
           <div className="flex border-b border-warm mb-4">

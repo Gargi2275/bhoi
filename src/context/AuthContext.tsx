@@ -52,12 +52,12 @@ interface AuthCtx {
   refreshUser: () => Promise<User | null>;
 }
 
-const Ctx = createContext<AuthCtx>({ 
-  user: null, 
+const Ctx = createContext<AuthCtx>({
+  user: null,
   effectivePermissions: [],
-  login: () => {}, 
-  loginWithApi: async () => { throw new Error("Not implemented"); }, 
-  logout: () => {},
+  login: () => { },
+  loginWithApi: async () => { throw new Error("Not implemented"); },
+  logout: () => { },
   refreshUser: async () => null
 });
 
@@ -88,15 +88,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (raw) {
         try {
           return JSON.parse(raw);
-        } catch (e) {}
+        } catch (e) { }
       }
     }
     return null;
   });
-  
-  const login = useCallback((u: User) => { 
-    localStorage.setItem(STORAGE, JSON.stringify(u)); 
-    setUser(u); 
+
+  const login = useCallback((u: User) => {
+    localStorage.setItem(STORAGE, JSON.stringify(u));
+    setUser(u);
   }, []);
 
   const loginWithApi = useCallback(async (username: string, password_raw: string): Promise<User> => {
@@ -126,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(mappedUser);
     return mappedUser;
   }, []);
-  
+
   const refreshUser = useCallback(async (): Promise<User | null> => {
     try {
       const apiUser = await api.getCurrentUser();
@@ -160,12 +160,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
   }, []);
-  
-  const logout = useCallback(() => { 
-    localStorage.removeItem(STORAGE); 
+
+  const logout = useCallback(() => {
+    localStorage.removeItem(STORAGE);
     localStorage.removeItem("wag_token");
     localStorage.removeItem("wag_refresh");
-    setUser(null); 
+    setUser(null);
   }, []);
 
   const effectivePermissions = (() => {
@@ -174,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user.role === "community_admin" && !user.customRoleName) return ALL_PERMISSIONS;
     return user.permissions || [];
   })();
-  
+
   return <Ctx.Provider value={{ user, effectivePermissions, login, loginWithApi, logout, refreshUser }}>{children}</Ctx.Provider>;
 }
 

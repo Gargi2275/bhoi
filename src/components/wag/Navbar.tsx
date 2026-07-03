@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect } from "react";
@@ -174,7 +174,6 @@ export default function Navbar() {
                         <div className="px-3 py-2.5 border-b border-warm mb-1">
                           <div className="font-medium text-sm">{user.name}</div>
                           <div className="text-xs text-warm-muted">{user.communityName}</div>
-                          <div className="mt-2"><PlanBadge plan={user.plan} /></div>
                         </div>
                         <Link to={dashHomeFor(user.role)} onClick={() => setDrop(false)} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-sand text-sm"><LayoutDashboard className="w-4 h-4" />Dashboard</Link>
                         <Link to="/dashboard/profile" onClick={() => setDrop(false)} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-sand text-sm"><User className="w-4 h-4" />My Profile</Link>
@@ -220,6 +219,6 @@ export default function Navbar() {
 
 export function dashHomeFor(role: string) {
   if (role === "super_admin") return "/admin";
-  if (role === "community_admin") return "/community-admin";
+  if (role === "community_admin" || role === "admin") return "/community-admin";
   return "/dashboard";
 }

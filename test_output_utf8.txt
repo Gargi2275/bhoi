@@ -1,0 +1,272 @@
+﻿python : Creating test database for alias 'default'...
+At line:1 char:1
++ python backend/manage.py test api > test_output.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Creating test d...as 'default'...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+........C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: 
+RuntimeWarning: DateTimeField CommunitySubscription.start_date received a naive datetime (2026-07-02 16:54:49.712918) 
+while time zone support is active.
+  warnings.warn(
+C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: 
+DateTimeField CommunitySubscription.end_date received a naive datetime (2026-08-01 16:54:49.712918) while time zone 
+support is active.
+  warnings.warn(
+.C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: 
+DateTimeField CommunitySubscription.start_date received a naive datetime (2026-07-02 16:54:52.901343) while time zone 
+support is active.
+  warnings.warn(
+C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: 
+DateTimeField CommunitySubscription.end_date received a naive datetime (2026-08-01 16:54:52.901343) while time zone 
+support is active.
+  warnings.warn(
+..C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: 
+DateTimeField CommunitySubscription.start_date received a naive datetime (2026-07-02 16:54:59.330944) while time zone 
+support is active.
+  warnings.warn(
+C:\Users\HP\AppData\Roaming\Python\Python314\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: 
+DateTimeField CommunitySubscription.end_date received a naive datetime (2026-08-01 16:54:59.330944) while time zone 
+support is active.
+  warnings.warn(
+.......FFFF.....................
+======================================================================
+FAIL: test_open_testing_only_excludes_deleted_suspended_and_same_user_profiles 
+(api.tests.MatrimonyOpenTestingModeTests.test_open_testing_only_excludes_deleted_suspended_and_same_user_profiles)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 126, in 
+test_open_testing_only_excludes_deleted_suspended_and_same_user_profiles
+    result_ids = {item['id'] for item in self._matches()}
+                                         ~~~~~~~~~~~~~^^
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 92, in _matches
+    self.assertEqual(response.status_code, 200)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 403 != 200
+
+======================================================================
+FAIL: test_open_testing_returns_all_other_eligible_profiles 
+(api.tests.MatrimonyOpenTestingModeTests.test_open_testing_returns_all_other_eligible_profiles)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 107, in 
+test_open_testing_returns_all_other_eligible_profiles
+    result_ids = {item['id'] for item in self._matches()}
+                                         ~~~~~~~~~~~~~^^
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 92, in _matches
+    self.assertEqual(response.status_code, 200)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 403 != 200
+
+======================================================================
+FAIL: test_profile_creation_auto_activates_and_approves_in_open_testing 
+(api.tests.MatrimonyOpenTestingModeTests.test_profile_creation_auto_activates_and_approves_in_open_testing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 160, in 
+test_profile_creation_auto_activates_and_approves_in_open_testing
+    self.assertEqual(response.status_code, 201)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 403 != 201
+
+======================================================================
+FAIL: test_api_compatibility_and_validation 
+(api.tests.MatrimonyPreferenceEngineTests.test_api_compatibility_and_validation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 847, in 
+test_api_compatibility_and_validation
+    self.assertEqual(response.status_code, 400)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 403 != 400
+
+----------------------------------------------------------------------
+Ran 43 tests in 228.715s
+
+FAILED (failures=4)
+Destroying test database for alias 'default'...
+
+Found 43 test(s).
+System check identified no issues (0 silenced).
+
+Viewer    : User B
+Candidate : Private Prof
+Visibility: PRIVATE
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Community Prof
+Visibility: COMMUNITY ONLY
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Community Prof
+Visibility: COMMUNITY ONLY
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Targeted Prof
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Targeted Prof
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Open Prof
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Open Prof
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Empty Target
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Empty Target
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User A
+Candidate : Target Bride
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Bride
+Visibility: TARGET_MATCHES
+Gender    : FAIL
+Age       : PASS
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Target Age
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Age
+Visibility: TARGET_MATCHES
+Age       : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : userc
+Candidate : Target Location
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : User B
+Candidate : User A
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : User A
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : User A
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : userb
+Candidate : User A
+Contact   : policy=Immediately | state=VISITOR | reveal=YES

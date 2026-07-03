@@ -246,7 +246,7 @@ function FamiliesPage() {
 // Fetch families by community_id using auth token
 async function apiFetchFamilies(communityId: any): Promise<any[]> {
   const token = localStorage.getItem("wag_token");
-  const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+  const BASE = import.meta.env.VITE_API_URL || `/api`;
   const res = await fetch(`${BASE}/families/?community_id=${communityId}`, {
     headers: {
       "Content-Type": "application/json",

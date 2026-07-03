@@ -1,7 +1,8 @@
 import { createFileRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { AccessGuard } from "@/components/wag/AccessGuard";
 import { useAuth } from "@/context/AuthContext";
 import { DashboardSidebar, MobileBottomNav, MobileHeader, type SidebarItem } from "@/components/wag/Sidebar";
-import { LayoutDashboard, Users, UserCog, UsersRound, Calendar, Megaphone, Image, HandHeart, Briefcase, Building2, Heart, FileBarChart, CreditCard, Settings, ShieldCheck, CalendarCheck, MapPin } from "lucide-react";
+import { LayoutDashboard, Users, UserCog, UsersRound, Calendar, Megaphone, Image, HandHeart, Briefcase, Building2, Heart, FileBarChart, CreditCard, Settings, ShieldCheck, CalendarCheck, MapPin, Box } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -26,14 +27,57 @@ const ITEMS: SidebarItem[] = [
   { to: "/community-admin/businesses", label: "Businesses", icon: Building2 },
   { to: "/community-admin/matrimony", label: "Matrimony", icon: Heart },
   { to: "/community-admin/reports", label: "Reports", icon: FileBarChart },
+  { to: "/community-admin/plan", label: "Organization Subscription", icon: CreditCard },
   { to: "/community-admin/settings", label: "Settings", icon: Settings },
 ];
+
+const ICON_MAP: Record<string, any> = {
+  LayoutDashboard,
+  Users,
+  UserCog,
+  UsersRound,
+  Calendar,
+  Megaphone,
+  Image,
+  HandHeart,
+  Briefcase,
+  Building2,
+  Heart,
+  FileBarChart,
+  CreditCard,
+  Settings,
+  ShieldCheck,
+  CalendarCheck,
+  MapPin,
+  Box
+};
+const labelToCodeMap: Record<string, string> = {
+  "Overview": "dashboard",
+  "Subsidiaries": "subsidiaries",
+  "Hierarchy": "hierarchy",
+  "Members": "members",
+  "Committee": "committee",
+  "Families": "families",
+  "Events": "events",
+  "News": "news",
+  "Gallery": "gallery",
+  "Donations": "donations",
+  "Property management": "venues",
+  "Venues": "venues",
+  "Jobs": "jobs",
+  "Businesses": "businesses",
+  "Matrimony": "matrimony",
+  "Reports": "reports",
+  "Organization Subscription": "plans",
+  "Settings": "settings",
+};
 
 function Layout() {
   const { user, effectivePermissions } = useAuth();
   const navigate = useNavigate();
   const [isSuper, setIsSuper] = useState(false);
   const [deniedError, setDeniedError] = useState<string | null>(null);
+  const [modules, setModules] = useState<any[]>([]);
 
   useEffect(() => {
     if (deniedError) {
@@ -47,6 +91,10 @@ function Layout() {
       navigate({ to: "/login" });
       return;
     }
+    if (user.role === "member") {
+      navigate({ to: "/dashboard" });
+      return;
+    }
     if (user.communityId) {
       api.getCommunities()
         .then(res => {
@@ -57,22 +105,51 @@ function Layout() {
         })
         .catch(err => console.error("Error checking community type", err));
     }
+    api.getSidebarModules()
+      .then(res => {
+        setModules(res || []);
+      })
+      .catch(err => console.error("Error fetching community admin sidebar modules", err));
   }, [user, navigate]);
 
   if (!user) return null;
 
-  let items = [...ITEMS];
+  const mappedItems = ITEMS.map(item => {
+    let code = labelToCodeMap[item.label];
+    if (!code && item.to) {
+      const parts = item.to.split("/");
+      code = parts[parts.length - 1];
+    }
+    const matched = modules.find((m: any) => m.module_code === code || m.module_code === labelToCodeMap[item.label]);
+    return {
+      ...item,
+      locked: matched ? matched.locked : false
+    };
+  });
+
+  let items = [...mappedItems];
   if (isSuper) {
-    items.splice(1, 0, { to: "/community-admin/subsidiaries", label: "Subsidiaries", icon: Building2 });
+    if (!items.some(i => i.to === "/community-admin/subsidiaries")) {
+      const matchedSub = modules.find((m: any) => m.module_code === "subsidiaries");
+      items.splice(1, 0, { 
+        to: "/community-admin/subsidiaries", 
+        label: "Subsidiaries", 
+        icon: Building2,
+        locked: matchedSub ? matchedSub.locked : false 
+      });
+    }
   }
 
   // Expand Venues into Property management (Parent) and sub-items (Overview, Add Property)
   const venuesIndex = items.findIndex(i => i.to === "/community-admin/venues");
   if (venuesIndex !== -1) {
+    const venueIcon = items[venuesIndex].icon;
+    const venueRoute = items[venuesIndex].to;
+    const venueLocked = items[venuesIndex].locked;
     items.splice(venuesIndex, 1,
-      { to: "/community-admin/venues", label: "Property management", icon: MapPin, search: { tab: "overview" } },
-      { to: "/community-admin/venues", label: "Overview", icon: LayoutDashboard, search: { tab: "overview" }, isSubItem: true },
-      { to: "/community-admin/venues", label: "Add Property", icon: PlusCircle, search: { tab: "add-property" }, isSubItem: true }
+      { to: venueRoute, label: "Property management", icon: venueIcon, search: { tab: "overview" }, locked: venueLocked },
+      { to: venueRoute, label: "Overview", icon: LayoutDashboard, search: { tab: "overview" }, isSubItem: true, locked: venueLocked },
+      { to: venueRoute, label: "Add Property", icon: PlusCircle, search: { tab: "add-property" }, isSubItem: true, locked: venueLocked }
     );
   }
 
@@ -83,7 +160,7 @@ function Layout() {
     const hasPerm = (perm: string) => p.includes(perm);
     
     items = items.filter(item => {
-      if (item.label === "Overview") return true; // Always show Dashboard/Overview
+      if (item.label === "Overview" || item.label === "Dashboard") return true; // Always show Dashboard/Overview
       if (item.label === "Members") return hasPerm("View Members");
       if (item.label === "Committee") return hasPerm("View Committee");
       if (item.label === "Families") return hasPerm("View Families");
@@ -146,7 +223,9 @@ function Layout() {
               </button>
             </div>
           )}
-          <Outlet />
+          <AccessGuard>
+            <Outlet />
+          </AccessGuard>
         </div>
       </div>
     </div>

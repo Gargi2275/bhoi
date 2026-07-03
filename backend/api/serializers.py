@@ -6,7 +6,17 @@ from .models import (
     News, Family, FamilyMember, EventRegistration,
     CommunityApprovalHistory, Notification, SubscriptionPlan, Role, Advertisement,
     Gallery, PartnerPreference, ProfileVisibility, InterestRequest, Wishlist, ProfileView,
-    MatrimonyPhoto, MatrimonyAuditLog, JobApplication
+    MatrimonyPhoto, MatrimonyAuditLog, JobApplication,
+    FeatureMaster, PlanFeaturePermission, CommunitySubscription,
+    SubscriptionHistory, PlanAddon, FeatureUsage, SubscriptionAuditLog,
+    ApplicationModule, ApplicationAction, ModuleAction, ApplicationModuleAuditLog,
+    MemberPremiumPlan, MemberPremiumFeature, MemberPremiumBenefit,
+    MemberPremiumAddon, MemberPremiumCoupon, MemberPremiumSubscription,
+    MemberFeatureUsage, MemberPremiumTransaction, MemberPremiumInvoice,
+    MemberAddonPurchase, MemberPremiumAuditLog,
+    CommunityLicense, CommunityModuleAccess, CommunityUsage, CommunityBilling,
+    CommunityInvoice, CommunityTransaction, CommunityAddon, CommunityAuditLog,
+    MemberPremiumReward, MemberPremiumSupportTicket
 )
 
 # UserSerializer is defined below to avoid duplicates
@@ -334,18 +344,20 @@ class BusinessSerializer(serializers.ModelSerializer):
 
 class MatrimonyPhotoSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
+    is_blurred = serializers.SerializerMethodField()
     
     class Meta:
         model = MatrimonyPhoto
         fields = '__all__'
         
     def get_image(self, obj):
+        request = self.context.get('request')
         if obj.image:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.image.url)
-            return obj.image.url
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
         return obj.image_url
+
+    def get_is_blurred(self, obj):
+        return False
 
 class MatrimonyAuditLogSerializer(serializers.ModelSerializer):
     performed_by_username = serializers.CharField(source='performed_by.username', read_only=True)
@@ -365,6 +377,9 @@ class MatrimonyProfileSerializer(serializers.ModelSerializer):
     completion_percentage = serializers.SerializerMethodField()
     debug_fields = serializers.SerializerMethodField()
     match_score = serializers.SerializerMethodField()
+    compatibility_breakdown = serializers.SerializerMethodField()
+    match_reasons = serializers.SerializerMethodField()
+    match_negatives = serializers.SerializerMethodField()
     family_details = serializers.SerializerMethodField()
     views_count = serializers.SerializerMethodField()
     interests_received_count = serializers.SerializerMethodField()
@@ -372,24 +387,137 @@ class MatrimonyProfileSerializer(serializers.ModelSerializer):
     photos_count = serializers.SerializerMethodField()
     visibility_details = serializers.SerializerMethodField()
     audience_count_cache = serializers.SerializerMethodField()
+    visibility_reason = serializers.SerializerMethodField()
+    visibility_passed = serializers.SerializerMethodField()
+    failed_conditions = serializers.SerializerMethodField()
+    matched_conditions = serializers.SerializerMethodField()
 
     class Meta:
         model = MatrimonyProfile
         fields = '__all__'
 
-    def get_match_score(self, obj):
+    def to_internal_value(self, data):
+        # Create a mutable copy of the data dictionary if possible
+        if hasattr(data, '_mutable'):
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        # Clean empty strings to None for nullable integer fields
+        for field in ['divorce_year', 'year_of_loss', 'children_count']:
+            if field in data and (data[field] == '' or data[field] is None):
+                data[field] = None
+
+        return super().to_internal_value(data)
+
+    def get_match_details(self, obj):
         request = self.context.get('request')
+        if not hasattr(self, '_match_details_cache'):
+            self._match_details_cache = {}
+        
+        if obj.id in self._match_details_cache:
+            return self._match_details_cache[obj.id]
+
         if request and request.user and request.user.is_authenticated:
             try:
-                my_profile = request.user.created_matrimony_profiles.filter(deleted_at__isnull=True).first()
+                my_profile = getattr(request.user, '_cached_matrimony_profile', None)
+                if not my_profile:
+                    my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
                 if my_profile:
-                    return my_profile.calculate_match_score(obj)
+                    from api.rule_engine import MatrimonyRuleEngine
+                    details = MatrimonyRuleEngine.calculateMatchScore(my_profile, obj)
+                    self._match_details_cache[obj.id] = details
+                    return details
             except Exception:
                 pass
-        # If open testing is enabled, let's return a dynamic pseudo-random but stable score (not always 100%)
-        # based on id to look realistic!
-        val = (obj.id * 17) % 35 + 60  # range 60 to 94
-        return val
+        
+        val = (obj.id * 17) % 35 + 60
+        details = {
+            "score": val,
+            "breakdown": {},
+            "reasons": ["✓ Basic Match"],
+            "negatives": []
+        }
+        self._match_details_cache[obj.id] = details
+        return details
+
+    def get_match_score(self, obj):
+        return self.get_match_details(obj)["score"]
+
+    def get_compatibility_breakdown(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return {}
+        my_profile = getattr(request.user, '_cached_matrimony_profile', None)
+        if not my_profile:
+            my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
+        if not my_profile:
+            return {}
+
+        details = self.get_match_details(obj)
+        breakdown = details.get("breakdown", {})
+        reasons = details.get("reasons", [])
+        negatives = details.get("negatives", [])
+
+        formatted = {}
+        categories = ["age", "community_caste", "marital_status", "education", "occupation", "location", "lifestyle", "religion", "income"]
+
+        patterns = {
+            "age": ["age", "years"],
+            "community_caste": ["community", "caste"],
+            "marital_status": ["marital"],
+            "education": ["education", "qualification", "degree"],
+            "occupation": ["occupation", "profession"],
+            "location": ["location", "city", "state", "country"],
+            "lifestyle": ["lifestyle", "diet", "smoke", "drink"],
+            "religion": ["religion"],
+            "income": ["income"]
+        }
+
+        for cat in categories:
+            match_msg = None
+            for r in reasons:
+                if any(p in r.lower() for p in patterns[cat]):
+                    match_msg = r
+                    break
+
+            gap_msg = None
+            for n in negatives:
+                if any(p in n.lower() for p in patterns[cat]):
+                    gap_msg = n
+                    break
+
+            if match_msg:
+                formatted[cat] = {
+                    "status": "Match",
+                    "message": match_msg
+                }
+            elif gap_msg:
+                formatted[cat] = {
+                    "status": "Gap",
+                    "message": gap_msg
+                }
+            else:
+                score = breakdown.get(cat, 0)
+                if score > 0:
+                    formatted[cat] = {
+                        "status": "Match",
+                        "message": "Match"
+                    }
+                else:
+                    formatted[cat] = {
+                        "status": "Gap",
+                        "message": "Gap"
+                    }
+        return formatted
+
+    def get_match_reasons(self, obj):
+        return self.get_match_details(obj)["reasons"]
+
+    def get_match_negatives(self, obj):
+        return self.get_match_details(obj)["negatives"]
 
     def get_views_count(self, obj):
         try:
@@ -510,23 +638,18 @@ class MatrimonyProfileSerializer(serializers.ModelSerializer):
     
     def get_photo(self, obj):
         try:
+            request = self.context.get('request')
             photo_obj = obj.photos.filter(category='Profile Photo').first()
             if photo_obj:
                 if photo_obj.image:
-                    request = self.context.get('request')
-                    if request:
-                        return request.build_absolute_uri(photo_obj.image.url)
-                    return photo_obj.image.url
+                    return request.build_absolute_uri(photo_obj.image.url) if request else photo_obj.image.url
                 return photo_obj.image_url
+            if obj.photo:
+                return request.build_absolute_uri(obj.photo.url) if request else obj.photo.url
+            return obj.photo_url
         except Exception:
             pass
-            
-        if obj.photo:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.photo.url)
-            return obj.photo.url
-        return obj.photo_url
+        return None
 
     def get_visibility_details(self, obj):
         try:
@@ -548,6 +671,72 @@ class MatrimonyProfileSerializer(serializers.ModelSerializer):
             return int(getattr(obj, 'audience_count_cache', 0) or 0)
         except Exception:
             return 0
+
+    def get_visibility_reason(self, obj):
+        try:
+            request = self.context.get('request')
+            viewer_user = request.user if request else None
+            from api.rule_engine import MatrimonyRuleEngine
+            visible, reason = MatrimonyRuleEngine.evaluate_visibility(obj, viewer_user)
+            return reason
+        except Exception:
+            return "Error calculating visibility"
+
+    def get_visibility_passed(self, obj):
+        try:
+            request = self.context.get('request')
+            viewer_user = request.user if request else None
+            from api.rule_engine import MatrimonyRuleEngine
+            visible, _ = MatrimonyRuleEngine.evaluate_visibility(obj, viewer_user)
+            return visible
+        except Exception:
+            return False
+
+    def get_failed_conditions(self, obj):
+        try:
+            if hasattr(obj, '_failed_conditions'):
+                return obj._failed_conditions
+            request = self.context.get('request')
+            viewer_user = request.user if request else None
+            from api.privacy_visibility_engine import PrivacyVisibilityEngine
+            from api.models import MatrimonyProfile
+            viewer_profile = None
+            if viewer_user and viewer_user.is_authenticated:
+                viewer_profile = MatrimonyProfile.objects.filter(user=viewer_user, deleted_at__isnull=True).first()
+            PrivacyVisibilityEngine.canDiscoverTargetProfile(obj, viewer_profile)
+            return getattr(obj, '_failed_conditions', [])
+        except Exception:
+            return []
+
+    def get_matched_conditions(self, obj):
+        try:
+            if hasattr(obj, '_matched_conditions'):
+                return obj._matched_conditions
+            request = self.context.get('request')
+            viewer_user = request.user if request else None
+            from api.privacy_visibility_engine import PrivacyVisibilityEngine
+            from api.models import MatrimonyProfile
+            viewer_profile = None
+            if viewer_user and viewer_user.is_authenticated:
+                viewer_profile = MatrimonyProfile.objects.filter(user=viewer_user, deleted_at__isnull=True).first()
+            PrivacyVisibilityEngine.canDiscoverTargetProfile(obj, viewer_profile)
+            return getattr(obj, '_matched_conditions', [])
+        except Exception:
+            return []
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        request = self.context.get('request')
+        viewer_user = request.user if request else None
+
+        from api.rule_engine import MatrimonyRuleEngine
+        ret = MatrimonyRuleEngine.serializeVisibleFields(instance, viewer_user, ret)
+
+        # Ensure compatibility fields photo and photo_url match the resolved value
+        ret['photo'] = self.get_photo(instance)
+        ret['photo_url'] = ret['photo']
+
+        return ret
 
 # Campaign Serializer
 class CampaignSerializer(serializers.ModelSerializer):
@@ -673,12 +862,28 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_plan(self, obj):
         try:
-            return obj.member_profile.community.plan
+            community = obj.member_profile.community
+            if community:
+                from api.models import CommunitySubscription
+                sub = CommunitySubscription.objects.filter(community=community).first()
+                if sub and sub.plan:
+                    return sub.plan.name
+                return community.plan or "Free"
         except Exception:
-            return "Free"
+            pass
+        return "Free"
 
     def get_planExpiry(self, obj):
-        return "2027-12-31" # Default fallback expiry
+        try:
+            community = obj.member_profile.community
+            if community:
+                from api.models import CommunitySubscription
+                sub = CommunitySubscription.objects.filter(community=community).first()
+                if sub and sub.end_date:
+                    return sub.end_date.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        return "2027-12-31"
 
     def create(self, validated_data):
         user = User.objects.create_user(
@@ -708,9 +913,50 @@ class CommunityApprovalHistorySerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id', 'created_at']
 
+class FeatureMasterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureMaster
+        fields = '__all__'
+
+class PlanFeaturePermissionSerializer(serializers.ModelSerializer):
+    feature_name = serializers.ReadOnlyField(source='feature.name')
+    feature_code = serializers.ReadOnlyField(source='feature.code')
+    class Meta:
+        model = PlanFeaturePermission
+        fields = '__all__'
+
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
+    feature_permissions = PlanFeaturePermissionSerializer(many=True, read_only=True)
     class Meta:
         model = SubscriptionPlan
+        fields = '__all__'
+
+class CommunitySubscriptionSerializer(serializers.ModelSerializer):
+    plan_name = serializers.ReadOnlyField(source='plan.name')
+    class Meta:
+        model = CommunitySubscription
+        fields = '__all__'
+
+class SubscriptionHistorySerializer(serializers.ModelSerializer):
+    plan_name = serializers.ReadOnlyField(source='plan.name')
+    class Meta:
+        model = SubscriptionHistory
+        fields = '__all__'
+
+class PlanAddonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlanAddon
+        fields = '__all__'
+
+class FeatureUsageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureUsage
+        fields = '__all__'
+
+class SubscriptionAuditLogSerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.ReadOnlyField(source='changed_by.username')
+    class Meta:
+        model = SubscriptionAuditLog
         fields = '__all__'
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -1068,3 +1314,466 @@ class BookingWaitingListSerializer(serializers.ModelSerializer):
     class Meta:
         model = BookingWaitingList
         fields = '__all__'
+
+
+class ApplicationActionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApplicationAction
+        fields = '__all__'
+
+class ModuleActionSerializer(serializers.ModelSerializer):
+    action_name = serializers.ReadOnlyField(source='action.name')
+    class Meta:
+        model = ModuleAction
+        fields = '__all__'
+
+class ApplicationModuleSerializer(serializers.ModelSerializer):
+    module_actions = ModuleActionSerializer(many=True, read_only=True)
+    actions = serializers.SerializerMethodField(read_only=True)
+    parent_module_name = serializers.ReadOnlyField(source='parent_module.display_name')
+    locked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = ApplicationModule
+        fields = '__all__'
+
+    def get_actions(self, obj):
+        return [ma.action.name for ma in obj.module_actions.all()]
+
+    def get_locked(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+            
+        user = request.user
+        is_super = user.is_superuser
+        try:
+            member = user.member_profile
+            if member and member.role == 'super_admin':
+                is_super = True
+        except Exception:
+            member = None
+            
+        if is_super:
+            return False
+            
+        if not member:
+            return False
+            
+        # If user is community admin, check community subscription plan permissions
+        if member.role == 'community_admin':
+            from api.models import CommunitySubscription, SubscriptionPlan, FeatureMaster, PlanFeaturePermission
+            always_available_admin = {'dashboard', 'plans', 'plan', 'settings', 'subscriptions'}
+            if obj.module_code in always_available_admin:
+                return False
+                
+            community = member.community
+            if not community:
+                return False
+                
+            sub = CommunitySubscription.objects.filter(community=community).first()
+            if not sub:
+                plan = SubscriptionPlan.objects.filter(code="basic").first()
+                if not plan:
+                    plan = SubscriptionPlan.objects.first()
+            else:
+                plan = sub.plan
+                
+            if not plan:
+                return False
+                
+            feature = FeatureMaster.objects.filter(code=obj.module_code).first()
+            if not feature:
+                return False
+                
+            perm = PlanFeaturePermission.objects.filter(plan=plan, feature=feature).first()
+            if perm:
+                return not perm.can_view
+            return False
+            
+        sub = MemberPremiumSubscription.objects.filter(
+            member=member,
+            status__in=['active', 'trial', 'grace_period']
+        ).first()
+        
+        plan = None
+        if sub:
+            plan = sub.plan
+        else:
+            plan = MemberPremiumPlan.objects.filter(code='free').first()
+            
+        if not plan:
+            return False
+            
+        code = obj.module_code
+        
+        # If the plan is a free plan, lock everything except dashboard and my subscription (or plan)
+        if plan.plan_type == 'free' or plan.code == 'free':
+            if code in ['dashboard', 'subscription', 'plan']:
+                return False
+            return True
+            
+        module_to_category_map = {
+            'matrimony': 'matrimony',
+            'messages': 'messaging',
+            'business': 'business',
+            'jobs': 'jobs',
+            'events': 'events',
+            'venues': 'venues',
+            'properties': 'property',
+            'members': 'directory',
+            'donations': 'donations',
+            'advertisements': 'ads',
+            'ai': 'ai',
+            'committee': 'committee',
+            'attendance': 'attendance',
+            'subsidiaries': 'subsidiaries',
+        }
+        
+        always_available = {
+            'dashboard', 'profile', 'plan', 'subscription', 'family', 'hierarchy', 'notifications', 'settings'
+        }
+        
+        if code in always_available:
+            return False
+            
+        category = module_to_category_map.get(code)
+        if not category:
+            return False
+            
+        feature_exists = MemberPremiumFeature.objects.filter(
+            plan=plan,
+            category=category,
+            is_enabled=True
+        ).exists()
+        
+        return not feature_exists
+
+
+class ApplicationModuleAuditLogSerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.ReadOnlyField(source='changed_by.username')
+    class Meta:
+        model = ApplicationModuleAuditLog
+        fields = '__all__'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2: MEMBER PREMIUM SUBSCRIPTION SERIALIZERS
+# ─────────────────────────────────────────────────────────────────────────────
+from .models import (
+    PremiumFeatureRegistry,
+    MemberPremiumPlan, MemberPremiumFeature, MemberPremiumBenefit,
+    MemberPremiumAddon, MemberPremiumCoupon, MemberPremiumSubscription,
+    MemberFeatureUsage, MemberPremiumTransaction, MemberPremiumInvoice,
+    MemberAddonPurchase, MemberPremiumAuditLog, MemberPremiumReward, MemberPremiumSupportTicket
+)
+
+
+class PremiumFeatureRegistrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PremiumFeatureRegistry
+        fields = '__all__'
+
+
+class MemberPremiumFeatureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MemberPremiumFeature
+        fields = '__all__'
+        read_only_fields = ['plan']
+
+
+class MemberPremiumBenefitSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MemberPremiumBenefit
+        fields = '__all__'
+        read_only_fields = ['plan']
+
+
+class MemberPremiumPlanSerializer(serializers.ModelSerializer):
+    features = MemberPremiumFeatureSerializer(many=True, required=False)
+    benefits = MemberPremiumBenefitSerializer(many=True, required=False)
+    active_subscribers = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = MemberPremiumPlan
+        fields = '__all__'
+
+    def get_active_subscribers(self, obj):
+        return MemberPremiumSubscription.objects.filter(plan=obj, status__in=['active', 'trial', 'grace_period']).count()
+
+    def to_representation(self, instance):
+        repr_data = super().to_representation(instance)
+        if 'features' in repr_data and repr_data['features'] is not None:
+            repr_data['features'] = [f for f in repr_data['features'] if f.get('is_enabled') is True]
+        return repr_data
+
+    def create(self, validated_data):
+        features_data = self.context.get('request').data.get('features', []) if self.context.get('request') else []
+        benefits_data = self.context.get('request').data.get('benefits', []) if self.context.get('request') else []
+        
+        # Pop nested writeable fields to prevent TypeError: 'features' is an invalid keyword argument for this function
+        validated_data.pop('features', None)
+        validated_data.pop('benefits', None)
+        
+        plan = MemberPremiumPlan.objects.create(**validated_data)
+        
+        for f in features_data:
+            # Pop plan from f if it is sent to avoid duplicate field errors
+            f.pop('plan', None)
+            MemberPremiumFeature.objects.create(plan=plan, **f)
+        for b in benefits_data:
+            b.pop('plan', None)
+            MemberPremiumBenefit.objects.create(plan=plan, **b)
+            
+        return plan
+
+    def update(self, instance, validated_data):
+        features_data = self.context.get('request').data.get('features', []) if self.context.get('request') else []
+        benefits_data = self.context.get('request').data.get('benefits', []) if self.context.get('request') else []
+        
+        # Pop nested writeable fields to prevent TypeError
+        validated_data.pop('features', None)
+        validated_data.pop('benefits', None)
+        
+        # Update plan basic fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Sync features
+        payload_codes = [f.get('feature_code') for f in features_data if f.get('feature_code')]
+        instance.features.exclude(feature_code__in=payload_codes).delete()
+        
+        for f in features_data:
+            code = f.get('feature_code')
+            if not code:
+                continue
+            MemberPremiumFeature.objects.update_or_create(
+                plan=instance,
+                feature_code=code,
+                defaults={
+                    'name': f.get('name', ''),
+                    'description': f.get('description', ''),
+                    'category': f.get('category', 'other'),
+                    'icon': f.get('icon', 'star'),
+                    'display_badge': f.get('display_badge', ''),
+                    'is_enabled': f.get('is_enabled', True),
+                    'is_unlimited': f.get('is_unlimited', False),
+                    'limit_type': f.get('limit_type', 'unlimited'),
+                    'limit_value': f.get('limit_value', 0),
+                    'priority': f.get('priority', 0),
+                    'upgrade_message': f.get('upgrade_message', ''),
+                }
+            )
+            
+        # Sync benefits
+        payload_titles = [b.get('title') for b in benefits_data if b.get('title')]
+        instance.benefits.exclude(title__in=payload_titles).delete()
+        
+        for b in benefits_data:
+            title = b.get('title')
+            if not title:
+                continue
+            MemberPremiumBenefit.objects.update_or_create(
+                plan=instance,
+                title=title,
+                defaults={
+                    'description': b.get('description', ''),
+                    'icon': b.get('icon', 'check'),
+                    'is_highlight': b.get('is_highlight', False),
+                    'display_order': b.get('display_order', 0),
+                    'is_included': b.get('is_included', True),
+                }
+            )
+            
+        return instance
+
+
+class MemberPremiumAddonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MemberPremiumAddon
+        fields = '__all__'
+
+
+class MemberPremiumCouponSerializer(serializers.ModelSerializer):
+    applicable_plans_names = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MemberPremiumCoupon
+        fields = '__all__'
+
+    def get_applicable_plans_names(self, obj):
+        return list(obj.applicable_plans.values_list('name', flat=True))
+
+
+class MemberFeatureUsageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MemberFeatureUsage
+        fields = '__all__'
+
+
+class MemberPremiumTransactionSerializer(serializers.ModelSerializer):
+    plan_name = serializers.ReadOnlyField(source='plan.name')
+    member_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MemberPremiumTransaction
+        fields = '__all__'
+
+    def get_member_name(self, obj):
+        try:
+            return obj.subscription.member.name
+        except Exception:
+            return ''
+
+
+class MemberPremiumInvoiceSerializer(serializers.ModelSerializer):
+    transaction_type = serializers.ReadOnlyField(source='transaction.transaction_type')
+    member_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MemberPremiumInvoice
+        fields = '__all__'
+
+    def get_member_name(self, obj):
+        try:
+            return obj.transaction.subscription.member.name
+        except Exception:
+            return ''
+
+
+class MemberAddonPurchaseSerializer(serializers.ModelSerializer):
+    addon_name = serializers.ReadOnlyField(source='addon.name')
+    member_name = serializers.ReadOnlyField(source='member.name')
+
+    class Meta:
+        model = MemberAddonPurchase
+        fields = '__all__'
+
+
+class MemberPremiumSubscriptionSerializer(serializers.ModelSerializer):
+    plan_name = serializers.ReadOnlyField(source='plan.name')
+    plan_code = serializers.ReadOnlyField(source='plan.code')
+    plan_type = serializers.ReadOnlyField(source='plan.plan_type')
+    plan_color = serializers.ReadOnlyField(source='plan.color_theme')
+    member_name = serializers.ReadOnlyField(source='member.name')
+    member_email = serializers.ReadOnlyField(source='member.email')
+    member_photo = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
+    feature_usages = MemberFeatureUsageSerializer(many=True, read_only=True)
+    transactions = MemberPremiumTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MemberPremiumSubscription
+        fields = '__all__'
+
+    def get_member_photo(self, obj):
+        try:
+            photo = obj.member.photo
+            if photo:
+                request = self.context.get('request')
+                url = photo.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
+        return None
+
+    def get_is_active(self, obj):
+        return obj.is_currently_active()
+
+
+class MemberPremiumAuditLogSerializer(serializers.ModelSerializer):
+    member_name = serializers.ReadOnlyField(source='member.name')
+    performed_by_name = serializers.ReadOnlyField(source='performed_by.username')
+    plan_name = serializers.ReadOnlyField(source='plan.name')
+
+    class Meta:
+        model = MemberPremiumAuditLog
+        fields = '__all__'
+
+
+# Phase 3.3: Community Subscription Management Serializers
+class CommunityLicenseSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+
+    class Meta:
+        model = CommunityLicense
+        fields = '__all__'
+
+
+class CommunityModuleAccessSerializer(serializers.ModelSerializer):
+    module_name = serializers.ReadOnlyField(source='module.display_name')
+    module_code = serializers.ReadOnlyField(source='module.module_code')
+
+    class Meta:
+        model = CommunityModuleAccess
+        fields = '__all__'
+
+
+class CommunityUsageSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+
+    class Meta:
+        model = CommunityUsage
+        fields = '__all__'
+
+
+class CommunityBillingSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+
+    class Meta:
+        model = CommunityBilling
+        fields = '__all__'
+
+
+class CommunityInvoiceSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+
+    class Meta:
+        model = CommunityInvoice
+        fields = '__all__'
+
+
+class CommunityTransactionSerializer(serializers.ModelSerializer):
+    invoice_no = serializers.ReadOnlyField(source='invoice.invoice_no')
+
+    class Meta:
+        model = CommunityTransaction
+        fields = '__all__'
+
+
+class CommunityAddonSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+    addon_name = serializers.ReadOnlyField(source='addon.name')
+    addon_code = serializers.ReadOnlyField(source='addon.code')
+
+    class Meta:
+        model = CommunityAddon
+        fields = '__all__'
+
+
+class CommunityAuditLogSerializer(serializers.ModelSerializer):
+    community_name = serializers.ReadOnlyField(source='community.name')
+    user_name = serializers.ReadOnlyField(source='user.username')
+
+    class Meta:
+        model = CommunityAuditLog
+        fields = '__all__'
+
+
+class MemberPremiumRewardSerializer(serializers.ModelSerializer):
+    member_name = serializers.ReadOnlyField(source='member.name')
+
+    class Meta:
+        model = MemberPremiumReward
+        fields = '__all__'
+        read_only_fields = ['member']
+
+
+class MemberPremiumSupportTicketSerializer(serializers.ModelSerializer):
+    member_name = serializers.ReadOnlyField(source='member.name')
+
+    class Meta:
+        model = MemberPremiumSupportTicket
+        fields = '__all__'
+        read_only_fields = ['member', 'ticket_no']

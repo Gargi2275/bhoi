@@ -284,6 +284,12 @@ export const Route = createFileRoute("/community-admin/members")({
                     <Field label="Company" value={open.company} />
                     <Field label="Industry" value={open.industry} />
                     <Field label="Annual Salary (LPA)" value={open.salary} />
+                    <Field label="Work Mode" value={open.job_work_mode} />
+                    <Field label="Job Type" value={open.job_type} />
+                    <Field label="Job City" value={open.job_city} />
+                    <Field label="Job State" value={open.job_state} />
+                    <Field label="Job Country" value={open.job_country} />
+                    <Field label="Job Address" value={open.job_address} />
                     {/* Business fields */}
                     <Field label="Business Name" value={open.business_name} />
                     <Field label="Business Category" value={open.business_category} />

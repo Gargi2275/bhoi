@@ -3,7 +3,8 @@ import {
   MATRIMONY, DONATIONS, CAMPAIGNS, NEWS, COMMITTEE, FAMILIES 
 } from "@/data/mock";
 
-const API_BASE = "http://localhost:8000/api";
+const HOSTNAME = typeof window !== "undefined" ? window.location.hostname : "localhost";
+const API_BASE = `/api`;
 
 export function getImageUrl(url: string | null | undefined): string {
   if (!url) return "";
@@ -11,7 +12,7 @@ export function getImageUrl(url: string | null | undefined): string {
     return url;
   }
   const path = url.startsWith("/") ? url : `/${url}`;
-  return `http://localhost:8000${path}`;
+  return path;
 }
 
 // Helper to handle fetch with optional authorization
@@ -43,7 +44,22 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
             errorMessage = errorData.detail;
           } else if (typeof errorData === 'object') {
             errorMessage = Object.entries(errorData)
-              .map(([key, val]) => `${key}: ${Array.isArray(val) ? val.join(', ') : val}`)
+              .map(([key, val]) => {
+                if (Array.isArray(val)) {
+                  const formattedVals = val.map(item => {
+                    if (item && typeof item === 'object') {
+                      return Object.entries(item)
+                        .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+                        .join(', ');
+                    }
+                    return String(item);
+                  });
+                  return `${key}: ${formattedVals.join('; ')}`;
+                } else if (val && typeof val === 'object') {
+                  return `${key}: ${JSON.stringify(val)}`;
+                }
+                return `${key}: ${val}`;
+              })
               .join('; ');
           }
         }
@@ -114,9 +130,10 @@ export const api = {
 
   async register(data: any) {
     try {
+      const isFormData = data instanceof FormData;
       return await apiFetch<any>("/auth/register/", {
         method: "POST",
-        body: JSON.stringify(data),
+        body: isFormData ? data : JSON.stringify(data),
       });
     } catch (e) {
       console.error("Registration failed", e);
@@ -897,6 +914,55 @@ export const api = {
   async deletePlan(id: string | number): Promise<void> {
     await apiFetch<void>(`/plans/${id}/`, { method: "DELETE" });
   },
+  async clonePlan(id: string | number, name?: string, code?: string): Promise<any> {
+    return await apiFetch<any>(`/plans/${id}/clone/`, {
+      method: "POST",
+      body: JSON.stringify({ name, code })
+    });
+  },
+  async archivePlan(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/plans/${id}/archive/`, {
+      method: "POST"
+    });
+  },
+  async updatePlanPermissions(id: string | number, permissions: any[]): Promise<any> {
+    return await apiFetch<any>(`/plans/${id}/permissions/`, {
+      method: "POST",
+      body: JSON.stringify({ permissions })
+    });
+  },
+  async getFeatures(): Promise<any[]> {
+    return await apiFetch<any[]>("/features/");
+  },
+  async scanFeatures(): Promise<any> {
+    return await apiFetch<any>("/features/scan/", { method: "POST" });
+  },
+
+  async cancelPlan(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/community-subscriptions/${id}/cancel/`, {
+      method: "POST"
+    });
+  },
+  async getSubscriptionUsage(id: string | number): Promise<any[]> {
+    return await apiFetch<any[]>(`/community-subscriptions/${id}/usage/`);
+  },
+
+  async createPlanAddon(data: any): Promise<any> {
+    return await apiFetch<any>("/plan-addons/", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+  async updatePlanAddon(id: string | number, data: any): Promise<any> {
+    return await apiFetch<any>(`/plan-addons/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+  async deletePlanAddon(id: string | number): Promise<void> {
+    await apiFetch<void>(`/plan-addons/${id}/`, { method: "DELETE" });
+  },
+
 
   // Roles
   async getRoles(): Promise<any[]> {
@@ -1195,9 +1261,20 @@ export const api = {
     return await apiFetch<any>(`/matrimony-profiles/analytics/${q}`, { cache: "no-store" });
   },
 
-  async getMatrimonyMatches(profileId?: string | number): Promise<any[]> {
+  async getMatrimonyMatches(profileId?: string | number, params?: any): Promise<any[]> {
     try {
-      const q = profileId ? `?profile_id=${profileId}` : "";
+      const queryParams = new URLSearchParams();
+      if (profileId) {
+        queryParams.append("profile_id", String(profileId));
+      }
+      if (params) {
+        Object.entries(params).forEach(([key, val]) => {
+          if (val !== undefined && val !== null && val !== "") {
+            queryParams.append(key, String(val));
+          }
+        });
+      }
+      const q = queryParams.toString() ? `?${queryParams.toString()}` : "";
       return await apiFetch<any[]>(`/matrimony-profiles/matches/${q}`, { cache: "no-store" });
     } catch (e) {
       console.warn("Failed to get matches", e);
@@ -1492,7 +1569,306 @@ export const api = {
   },
   async deleteResourceDependency(id: number | string): Promise<any> {
     return await apiFetch<any>(`/resource-dependencies/${id}/`, { method: 'DELETE' });
-  }
+  },
+  async getModules(params?: Record<string, string>): Promise<any[]> {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    return await apiFetch<any[]>(`/modules/${query}`);
+  },
+  async getSidebarModules(): Promise<any[]> {
+    return await apiFetch<any[]>("/modules/sidebar/");
+  },
+  async getSubscriptionModules(): Promise<any[]> {
+    return await apiFetch<any[]>("/modules/subscription/");
+  },
+  async getPermissionModules(): Promise<any[]> {
+    return await apiFetch<any[]>("/modules/permission/");
+  },
+  async getUsageModules(): Promise<any[]> {
+    return await apiFetch<any[]>("/modules/usage/");
+  },
+  async getAnalyticsModules(): Promise<any[]> {
+    return await apiFetch<any[]>("/modules/analytics/");
+  },
+  async createModule(data: any): Promise<any> {
+    return await apiFetch<any>("/modules/", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+  async updateModule(id: string | number, data: any): Promise<any> {
+    return await apiFetch<any>(`/modules/${id}/`, {
+      method: "PUT",
+      body: JSON.stringify(data)
+    });
+  },
+  async deleteModule(id: string | number): Promise<void> {
+    return await apiFetch<void>(`/modules/${id}/`, {
+      method: "DELETE"
+    });
+  },
+  async activateModule(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/modules/${id}/activate/`, {
+      method: "POST"
+    });
+  },
+  async deactivateModule(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/modules/${id}/deactivate/`, {
+      method: "POST"
+    });
+  },
+  async archiveModule(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/modules/${id}/archive/`, {
+      method: "POST"
+    });
+  },
+  async cloneModule(id: string | number): Promise<any> {
+    return await apiFetch<any>(`/modules/${id}/clone/`, {
+      method: "POST"
+    });
+  },
+  async bulkActivateModules(ids: any[]): Promise<any> {
+    return await apiFetch<any>("/modules/bulk-activate/", {
+      method: "POST",
+      body: JSON.stringify({ ids })
+    });
+  },
+  async bulkDeactivateModules(ids: any[]): Promise<any> {
+    return await apiFetch<any>("/modules/bulk-deactivate/", {
+      method: "POST",
+      body: JSON.stringify({ ids })
+    });
+  },
+  async bulkUpdateModules(updates: any[]): Promise<any> {
+    return await apiFetch<any>("/modules/bulk-update/", {
+      method: "POST",
+      body: JSON.stringify({ updates })
+    });
+  },
+  async scanModules(): Promise<any> {
+    return await apiFetch<any>("/modules/scan/", {
+      method: "POST"
+    });
+  },
+  // ─── COMMUNITY SUBSCRIPTION ENGINE (Phase 3.2) ────────────────────────────
+  // Plans & Core Subscription
+  async getMyPlan(): Promise<any> {
+    return await apiFetch<any>("/community-subscriptions/my-plan/");
+  },
+  async getCommunitySubscriptions(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/community-subscriptions/"); } catch { return []; }
+  },
+  async assignPlan(data: { community_id: number; plan_id: number; billing_cycle: string; price_paid: number }): Promise<any> {
+    return await apiFetch<any>("/community-subscriptions/assign/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async renewPlan(subscriptionId: number, data: { billing_cycle: string; price_paid?: number; coupon?: string }): Promise<any> {
+    return await apiFetch<any>(`/community-subscriptions/${subscriptionId}/renew/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  async cancelPlanAutoRenew(subscriptionId: number): Promise<any> {
+    return await apiFetch<any>(`/community-subscriptions/${subscriptionId}/cancel/`, { method: "POST" });
+  },
+  async updateCommunitySubscription(subscriptionId: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/community-subscriptions/${subscriptionId}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+
+  // Plan Addons Marketplace
+  async getPlanAddons(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/plan-addons/"); } catch { return []; }
+  },
+  async purchasePlanAddon(data: { addon_id: number; quantity: number; community_id?: number }): Promise<any> {
+    return await apiFetch<any>("/plan-addons/purchase/", { method: "POST", body: JSON.stringify(data) });
+  },
+
+  // Subscription History & Invoices
+  async getSubscriptionHistory(params?: { community?: number; action?: string; dateFrom?: string; dateTo?: string }): Promise<any[]> {
+    const q = new URLSearchParams();
+    if (params?.community) q.set("community", String(params.community));
+    if (params?.action) q.set("action", params.action);
+    if (params?.dateFrom) q.set("date_from", params.dateFrom);
+    if (params?.dateTo) q.set("date_to", params.dateTo);
+    try { return await apiFetch<any[]>(`/subscription-history/?${q.toString()}`); } catch { return []; }
+  },
+
+  // Subscription Audit Logs
+  async getSubscriptionAuditLogs(communityId?: number): Promise<any[]> {
+    const q = communityId ? `?community=${communityId}` : "";
+    try { return await apiFetch<any[]>(`/subscription-audit-logs/${q}`); } catch { return []; }
+  },
+
+  // Feature Usage (Quotas)
+  async getFeatureUsages(communityId?: number): Promise<any[]> {
+    const q = communityId ? `?community=${communityId}` : "";
+    try { return await apiFetch<any[]>(`/feature-usages/${q}`); } catch { return []; }
+  },
+
+  // Coupon Validation (community subscription)
+  async validateSubscriptionCoupon(code: string, planId?: number): Promise<any> {
+    return await apiFetch<any>("/plans/validate-coupon/", {
+      method: "POST",
+      body: JSON.stringify({ code, plan_id: planId })
+    });
+  },
+
+  // Check module access
+  async checkAccess(moduleCode: string, action: string = "view"): Promise<{ has_access: boolean; status: string; reason?: string; current?: number; limit?: number }> {
+    return await apiFetch<{ has_access: boolean; status: string; reason?: string; current?: number; limit?: number }>(
+      `/community-subscriptions/check-access/?module=${moduleCode}&action=${action}`
+    );
+  },
+
+  // ─── PHASE 2: Member Premium ──────────────────────────────────────────────
+  // Plans
+  async getMemberPremiumPlans(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-plans/"); } catch { return []; }
+  },
+  async createMemberPremiumPlan(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-plans/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async updateMemberPremiumPlan(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-plans/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  async deleteMemberPremiumPlan(id: number): Promise<void> {
+    await apiFetch<void>(`/member-premium-plans/${id}/`, { method: "DELETE" });
+  },
+  async cloneMemberPremiumPlan(id: number): Promise<any> {
+    return await apiFetch<any>(`/member-premium-plans/${id}/clone/`, { method: "POST" });
+  },
+  async archiveMemberPremiumPlan(id: number): Promise<any> {
+    return await apiFetch<any>(`/member-premium-plans/${id}/archive/`, { method: "POST" });
+  },
+  async getMemberPremiumPlanAnalytics(): Promise<any> {
+    try { return await apiFetch<any>("/member-premium-plans/analytics/"); } catch { return {}; }
+  },
+  async getPremiumFeatureRegistry(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/premium-feature-registry/"); } catch { return []; }
+  },
+
+  // Features
+  async getMemberPremiumFeatures(planId?: number): Promise<any[]> {
+    const q = planId ? `?plan=${planId}` : "";
+    try { return await apiFetch<any[]>(`/member-premium-features/${q}`); } catch { return []; }
+  },
+  async createMemberPremiumFeature(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-features/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async updateMemberPremiumFeature(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-features/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  async deleteMemberPremiumFeature(id: number): Promise<void> {
+    await apiFetch<void>(`/member-premium-features/${id}/`, { method: "DELETE" });
+  },
+
+  // Benefits
+  async getMemberPremiumBenefits(planId?: number): Promise<any[]> {
+    const q = planId ? `?plan=${planId}` : "";
+    try { return await apiFetch<any[]>(`/member-premium-benefits/${q}`); } catch { return []; }
+  },
+  async createMemberPremiumBenefit(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-benefits/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async updateMemberPremiumBenefit(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-benefits/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  async deleteMemberPremiumBenefit(id: number): Promise<void> {
+    await apiFetch<void>(`/member-premium-benefits/${id}/`, { method: "DELETE" });
+  },
+
+  // Add-ons
+  async getMemberPremiumAddons(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-addons/"); } catch { return []; }
+  },
+  async createMemberPremiumAddon(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-addons/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async updateMemberPremiumAddon(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-addons/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  async deleteMemberPremiumAddon(id: number): Promise<void> {
+    await apiFetch<void>(`/member-premium-addons/${id}/`, { method: "DELETE" });
+  },
+
+  // Coupons
+  async getMemberPremiumCoupons(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-coupons/"); } catch { return []; }
+  },
+  async createMemberPremiumCoupon(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-coupons/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async updateMemberPremiumCoupon(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-coupons/${id}/`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+  async deleteMemberPremiumCoupon(id: number): Promise<void> {
+    await apiFetch<void>(`/member-premium-coupons/${id}/`, { method: "DELETE" });
+  },
+
+  // Subscriptions
+  async getMemberPremiumSubscriptions(params?: { status?: string; plan?: number; search?: string }): Promise<any[]> {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.plan) q.set("plan", String(params.plan));
+    if (params?.search) q.set("search", params.search);
+    try { return await apiFetch<any[]>(`/member-premium-subscriptions/?${q.toString()}`); } catch { return []; }
+  },
+  async assignMemberPremiumSubscription(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-subscriptions/assign/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async activateMemberPremiumSubscription(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-subscriptions/${id}/activate/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  async cancelMemberPremiumSubscription(id: number, data?: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-subscriptions/${id}/cancel/`, { method: "POST", body: JSON.stringify(data || {}) });
+  },
+  async suspendMemberPremiumSubscription(id: number, data?: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-subscriptions/${id}/suspend/`, { method: "POST", body: JSON.stringify(data || {}) });
+  },
+  async upgradeMemberPremiumSubscription(id: number, data: { plan_id: number; billing_cycle?: string; payment_method?: string; coupon?: string } | number): Promise<any> {
+    const body = typeof data === "number" ? { plan_id: data } : data;
+    return await apiFetch<any>(`/member-premium-subscriptions/${id}/upgrade/`, { method: "POST", body: JSON.stringify(body) });
+  },
+
+  // Transactions
+  async getMemberPremiumTransactions(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-transactions/"); } catch { return []; }
+  },
+
+  // Invoices
+  async getMemberPremiumInvoices(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-invoices/"); } catch { return []; }
+  },
+
+  // Audit Logs
+  async getMemberPremiumAuditLogs(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-audit-logs/"); } catch { return []; }
+  },
+
+  // Phase 4 additions
+  async getMemberMyMembership(): Promise<any> {
+    return await apiFetch<any>("/member-premium-subscriptions/my-membership/");
+  },
+  async renewMemberPremiumSubscription(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-subscriptions/${id}/renew/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  async purchaseMemberPremiumAddon(id: number, data: any): Promise<any> {
+    return await apiFetch<any>(`/member-premium-addons/${id}/purchase/`, { method: "POST", body: JSON.stringify(data) });
+  },
+  async getMemberPremiumRewards(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-rewards/"); } catch { return []; }
+  },
+  async getMemberPremiumTickets(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/member-premium-tickets/"); } catch { return []; }
+  },
+  async createMemberPremiumTicket(data: any): Promise<any> {
+    return await apiFetch<any>("/member-premium-tickets/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async validateMemberPremiumCoupon(data: { code: string; plan_id?: number; amount: number }): Promise<any> {
+    return await apiFetch<any>("/member-premium-coupons/validate/", { method: "POST", body: JSON.stringify(data) });
+  },
+  async checkMemberFeatureLimit(featureCode: string, memberId?: number | string): Promise<{ has_access: boolean; reason?: string; upgrade_message?: string; used?: number; limit?: number; remaining?: number; unlimited?: boolean }> {
+    return await apiFetch<any>("/member-premium-subscriptions/check-feature/", {
+      method: "POST",
+      body: JSON.stringify({ feature_code: featureCode, member_id: memberId })
+    });
+  },
 };
 
 export default api;
+

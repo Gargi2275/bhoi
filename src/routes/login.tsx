@@ -1,4 +1,4 @@
-﻿import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import React, { useState } from "react";
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Sparkles, Key } from "lucide-react";
 import { toast } from "sonner";
@@ -44,17 +44,27 @@ function App() {
   // Quick Demo Pre-fill state
   const [isDemoOpen, setIsDemoOpen] = useState(false);
 
-  const demoAccounts: Record<Role, { u: string, p: string, label: string }> = {
-    member: { u: "shahharshil@gmail.com", p: "Admin@123", label: "Member" },
-    community_admin: { u: "shahharshil303@gmaiil.com", p: "Admin@123", label: "Samaj Admin" },
-    super_admin: { u: "admin", p: "Admin@123", label: "Super Admin" },
-  };
+  interface DemoAccount {
+    u: string;
+    p: string;
+    label: string;
+    name: string;
+  }
 
-  const handleDemoFill = (role: Role) => {
-    setEmail(demoAccounts[role].u);
-    setPassword(demoAccounts[role].p);
+  const demoAccounts: DemoAccount[] = [
+    { u: "admin", p: "admin123", label: "Super Admin", name: "System Root" },
+    { u: "mehul@samaj.org", p: "admin123", label: "Samaj Admin", name: "Mehul Solanki" },
+    { u: "rohit@example.com", p: "admin123", label: "Samaj Member", name: "Rohit Patel" },
+    { u: "rutvika@gmail.com", p: "Admin@123", label: "Samaj Admin", name: "Rutvika Jinjala" },
+    { u: "ruta@gmail.com", p: "Admin@123", label: "Samaj Admin", name: "Ruta Ahir" },
+    { u: "harshilshah_496", p: "Admin@123", label: "Samaj Member", name: "Harshil Shah" },
+  ];
+
+  const handleDemoFill = (acc: DemoAccount) => {
+    setEmail(acc.u);
+    setPassword(acc.p);
     setIsDemoOpen(false);
-    toast.success(`Prefilled as ${demoAccounts[role].label}`);
+    toast.success(`Prefilled as ${acc.label} (${acc.name})`);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -910,44 +920,20 @@ function App() {
               Select an official profile to prefill the login variables instantaneously:
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
-              {/* Member Card */}
-              <button
-                type="button"
-                onClick={() => handleDemoFill("member")}
-                className="p-4 rounded-2xl bg-white border border-stone-200/80 hover:border-orange-300 hover:bg-orange-50/40 text-left transition-all active:scale-95 group shadow-sm"
-              >
-                <div className="text-xs font-bold text-orange-600 mb-1">Samaj Member</div>
-                <div className="text-[13px] font-extrabold text-[#2C1D12] group-hover:text-orange-900 truncate">Harshil Shah</div>
-                <div className="text-[11px] text-stone-500 mt-2 truncate">shahharshil@gmail.com</div>
-                <div className="text-[10px] text-stone-400 font-medium">Password: Admin@123</div>
-              </button>
-
-              {/* Samaj Admin Card */}
-              <button
-                type="button"
-                onClick={() => handleDemoFill("community_admin")}
-                className="p-4 rounded-2xl bg-white border border-stone-200/80 hover:border-orange-300 hover:bg-orange-50/40 text-left transition-all active:scale-95 group shadow-sm"
-              >
-                <div className="text-xs font-bold text-orange-600 mb-1">Samaj Admin</div>
-                <div className="text-[13px] font-extrabold text-[#2C1D12] group-hover:text-orange-900 truncate">Harshil Shah (Admin)</div>
-                <div className="text-[11px] text-stone-500 mt-2 truncate">shahharshil303@gmaiil.com</div>
-                <div className="text-[10px] text-stone-400 font-medium">Password: Admin@123</div>
-              </button>
-
-              {/* Super Admin Card */}
-              <button
-                type="button"
-                onClick={() => handleDemoFill("super_admin")}
-                className="p-4 rounded-2xl bg-white border border-stone-200/80 hover:border-orange-300 hover:bg-orange-50/40 text-left transition-all active:scale-95 group shadow-sm"
-              >
-                <div className="text-xs font-bold text-orange-600 mb-1">Super Admin</div>
-                <div className="text-[13px] font-extrabold text-[#2C1D12] group-hover:text-orange-900 truncate">System Root</div>
-                <div className="text-[11px] text-stone-500 mt-2 truncate">admin</div>
-                <div className="text-[10px] text-stone-400 font-medium">Password: Admin@123</div>
-              </button>
-
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              {demoAccounts.map((acc) => (
+                <button
+                  key={acc.u}
+                  type="button"
+                  onClick={() => handleDemoFill(acc)}
+                  className="p-4 rounded-2xl bg-white border border-stone-200/80 hover:border-orange-300 hover:bg-orange-50/40 text-left transition-all active:scale-95 group shadow-sm"
+                >
+                  <div className="text-xs font-bold text-orange-600 mb-1">{acc.label}</div>
+                  <div className="text-[13px] font-extrabold text-[#2C1D12] group-hover:text-orange-900 truncate">{acc.name}</div>
+                  <div className="text-[11px] text-stone-500 mt-2 truncate">{acc.u}</div>
+                  <div className="text-[10px] text-stone-400 font-medium">Password: {acc.p}</div>
+                </button>
+              ))}
             </div>
           </div>
         </div>

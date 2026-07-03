@@ -36,6 +36,10 @@ class Command(BaseCommand):
             self.stdout.write('Superuser "admin" with password "admin123" created.')
         else:
             admin_user = User.objects.get(username='admin')
+            admin_user.email = 'admin@weareunited.in'
+            admin_user.set_password('admin123')
+            admin_user.save()
+            self.stdout.write('Superuser "admin" password reset to "admin123" and email updated.')
 
         # Mock image url helper
         def u(img_id, w=400, h=400):
@@ -108,6 +112,7 @@ class Command(BaseCommand):
             education="B.Tech",
             community=communities_map["Rampara Ahir Samaj"],
             status="Verified",
+            aadhaar_status="Approved",
             role="member"
         )
 
@@ -131,6 +136,7 @@ class Command(BaseCommand):
             education="MBA",
             community=communities_map["Rajula Samaj Mandal"],
             status="Verified",
+            aadhaar_status="Approved",
             role="community_admin"
         )
 
@@ -148,7 +154,123 @@ class Command(BaseCommand):
             education="CA",
             community=communities_map["Rajula Samaj Mandal"],
             status="Verified",
+            aadhaar_status="Approved",
             role="super_admin"
+        )
+
+        # d) Frontend Quick Demo Account: rutvika@gmail.com
+        rutvika_user, _ = User.objects.get_or_create(username='rutvika@gmail.com', email='rutvika@gmail.com')
+        rutvika_user.set_password('Admin@123')
+        rutvika_user.first_name = "Rutvika"
+        rutvika_user.last_name = "Jinjala"
+        rutvika_user.save()
+        Member.objects.create(
+            user=rutvika_user,
+            name="Rutvika Jinjala",
+            avatar_url="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&fit=crop",
+            age=29,
+            gender="Female",
+            email="rutvika@gmail.com",
+            phone="+91 9900012346",
+            village="Rampara",
+            profession="Architect",
+            education="B.Arch",
+            community=communities_map["Rampara Ahir Samaj"],
+            status="Verified",
+            aadhaar_status="Approved",
+            role="community_admin"
+        )
+
+        # e) Frontend Quick Demo Account: ruta@gmail.com
+        ruta_user, _ = User.objects.get_or_create(username='ruta@gmail.com', email='ruta@gmail.com')
+        ruta_user.set_password('Admin@123')
+        ruta_user.first_name = "Ruta"
+        ruta_user.last_name = "Ahir"
+        ruta_user.save()
+        Member.objects.create(
+            user=ruta_user,
+            name="Ruta Ahir",
+            avatar_url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop",
+            age=26,
+            gender="Female",
+            email="ruta@gmail.com",
+            phone="+91 9900012347",
+            village="Rajula",
+            profession="Interior Designer",
+            education="B.Des",
+            community=communities_map["Rajula Samaj Mandal"],
+            status="Verified",
+            aadhaar_status="Approved",
+            role="community_admin"
+        )
+
+        # f) Frontend Quick Demo Account: harshilshah_496
+        harshil_user, _ = User.objects.get_or_create(username='harshilshah_496', email='harshilshah_496@gmail.com')
+        harshil_user.set_password('Admin@123')
+        harshil_user.first_name = "Harshil"
+        harshil_user.last_name = "Shah"
+        harshil_user.save()
+        Member.objects.create(
+            user=harshil_user,
+            name="Harshil Shah",
+            avatar_url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop",
+            age=27,
+            gender="Male",
+            email="harshilshah_496@gmail.com",
+            phone="+91 9900012348",
+            village="Rajula",
+            profession="Data Analyst",
+            education="B.Sc",
+            community=communities_map["Rajula Samaj Mandal"],
+            status="Verified",
+            aadhaar_status="Approved",
+            role="member"
+        )
+
+        # g) Additional test user requested: member2@gmail.com
+        member2_user, _ = User.objects.get_or_create(username='member2@gmail.com', email='member2@gmail.com')
+        member2_user.set_password('Admin@123')
+        member2_user.first_name = "Member"
+        member2_user.last_name = "Two"
+        member2_user.save()
+        Member.objects.create(
+            user=member2_user,
+            name="Member Two",
+            avatar_url="https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=200&h=200&fit=crop",
+            age=25,
+            gender="Male",
+            email="member2@gmail.com",
+            phone="+91 9900012349",
+            village="Rajula",
+            profession="Project Manager",
+            education="B.BA",
+            community=communities_map["Rajula Samaj Mandal"],
+            status="Verified",
+            aadhaar_status="Approved",
+            role="member"
+        )
+
+        # h) Additional test user: member1@gmail.com
+        member1_user, _ = User.objects.get_or_create(username='member1@gmail.com', email='member1@gmail.com')
+        member1_user.set_password('Admin@123')
+        member1_user.first_name = "Member"
+        member1_user.last_name = "One"
+        member1_user.save()
+        Member.objects.create(
+            user=member1_user,
+            name="Member One",
+            avatar_url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop",
+            age=24,
+            gender="Male",
+            email="member1@gmail.com",
+            phone="+91 9900012350",
+            village="Rajula",
+            profession="Analyst",
+            education="B.Com",
+            community=communities_map["Rajula Samaj Mandal"],
+            status="Verified",
+            aadhaar_status="Approved",
+            role="member"
         )
 
         # 4. Generate all other 30 members programmatically to match frontend
@@ -195,6 +317,7 @@ class Command(BaseCommand):
             
             target_community = unique_communities[i % len(unique_communities)]
             
+            m_status = statuses[i % len(statuses)]
             Member.objects.create(
                 user=new_u,
                 name=u_name,
@@ -207,8 +330,9 @@ class Command(BaseCommand):
                 profession=professions[i % len(professions)],
                 education=educations[i % len(educations)],
                 community=target_community,
-                status=statuses[i % len(statuses)],
+                status=m_status,
                 aadhaar=f"1234123410{10+i}",
+                aadhaar_status='Approved' if m_status == 'Verified' else 'Pending',
                 role="member"
             )
 
@@ -322,7 +446,7 @@ class Command(BaseCommand):
                 age=22 + (i % 12),
                 education=educations_mat[i % len(educations_mat)],
                 profession=professions[i % len(professions)],
-                location=locations_mat[i % len(locations_mat)],
+                city=locations_mat[i % len(locations_mat)],
                 photo_url=u(matriPhotos[i % len(matriPhotos)], 400, 500),
                 match=60 + ((i * 7) % 40),
                 status=statuses_mat[i % len(statuses_mat)],

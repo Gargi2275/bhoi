@@ -1,15 +1,13 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useAuth } from "@/context/AuthContext";
-import { DashboardSidebar, MobileBottomNav, MobileHeader, type SidebarItem } from "@/components/wag/Sidebar";
-import { LayoutDashboard, Building2, Users, UserCog, Calendar, Heart, Briefcase, HandHeart, Image, CreditCard, FileBarChart, FileText, ShieldCheck, Settings, MapPin } from "lucide-react";
-import { useEffect } from "react";
+import { DashboardSidebar, MobileHeader, type SidebarItem } from "@/components/wag/Sidebar";
+import { LayoutDashboard, Building2, Users, UserCog, Calendar, Heart, Briefcase, HandHeart, Image, CreditCard, FileBarChart, FileText, ShieldCheck, Settings, MapPin, Network, Crown } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/admin")({
   component: Layout,
 });
-
-import { Network } from "lucide-react";
 
 const ITEMS: SidebarItem[] = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
@@ -23,24 +21,31 @@ const ITEMS: SidebarItem[] = [
   { to: "/admin/jobs-businesses", label: "Jobs & Businesses", icon: Briefcase },
   { to: "/admin/donations", label: "Donations", icon: HandHeart },
   { to: "/admin/advertisements", label: "Advertisements", icon: Image },
-  { to: "/admin/subscriptions", label: "Subscriptions", icon: CreditCard },
   { to: "/admin/reports", label: "Reports", icon: FileBarChart },
   { to: "/admin/cms", label: "CMS", icon: FileText },
   { to: "/admin/roles", label: "Roles", icon: ShieldCheck },
+  { to: "/admin/subscriptions", label: "License Management", icon: CreditCard },
+  { to: "/admin/member-premium", label: "Member Premium", icon: Crown },
   { to: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 function Layout() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  useEffect(() => { 
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
     if (!user) {
-      navigate({ to: "/login" }); 
+      navigate({ to: "/login" });
     } else if (user.role !== "super_admin") {
       navigate({ to: user.role === "community_admin" ? "/community-admin" : "/dashboard" });
     }
   }, [user, navigate]);
+
+  if (!mounted) return null;
   if (!user || user.role !== "super_admin") return null;
+
   return (
     <div className="flex flex-col min-h-screen bg-transparent w-full">
       <MobileHeader title="Super Admin" items={ITEMS} />

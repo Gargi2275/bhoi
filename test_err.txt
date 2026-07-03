@@ -1,0 +1,302 @@
+Creating test database for alias 'default'...
+.......F.F...F.......
+======================================================================
+FAIL: test_open_testing_returns_all_other_eligible_profiles (api.tests.MatrimonyOpenTestingModeTests.test_open_testing_returns_all_other_eligible_profiles)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 110, in test_open_testing_returns_all_other_eligible_profiles
+    self.assertIn(custom_audience_profile.id, result_ids)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 3 not found in {2}
+
+======================================================================
+FAIL: test_api_compatibility_and_validation (api.tests.MatrimonyPreferenceEngineTests.test_api_compatibility_and_validation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 833, in test_api_compatibility_and_validation
+    self.assertEqual(data['compatibility'], 100)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 96 != 100
+
+======================================================================
+FAIL: test_soft_filter_calculations (api.tests.MatrimonyPreferenceEngineTests.test_soft_filter_calculations)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\HP\Downloads\we-are-going-home-main\we-are-going-home-main\backend\api\tests.py", line 801, in test_soft_filter_calculations
+    self.assertEqual(res['compatibility'], 85)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 83 != 85
+
+----------------------------------------------------------------------
+Ran 21 tests in 75.428s
+
+FAILED (failures=3)
+Destroying test database for alias 'default'...
+Found 21 test(s).
+System check identified no issues (0 silenced).
+
+Viewer    : User B
+Candidate : Private Prof
+Visibility: PRIVATE
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Community Prof
+Visibility: COMMUNITY ONLY
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Community Prof
+Visibility: COMMUNITY ONLY
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Targeted Prof
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Targeted Prof
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Open Prof
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Open Prof
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Empty Target
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Empty Target
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User A
+Candidate : Target Bride
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Bride
+Visibility: TARGET_MATCHES
+Gender    : FAIL
+Age       : PASS
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Target Age
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Age
+Visibility: TARGET_MATCHES
+Age       : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User B
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : Target Location
+Visibility: TARGET_MATCHES
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : userc
+Candidate : Target Location
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : User B
+Candidate : User A
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : User C
+Candidate : User A
+Visibility: TARGET_MATCHES
+Gender    : PASS
+Age       : PASS
+Location  : FAIL
+Final     : FAIL
+Returned  : NO
+
+Viewer    : User B
+Candidate : User A
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : userb
+Candidate : User A
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : Requester
+Candidate : Approved Match
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : Requester
+Candidate : Unapproved Match
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : Requester
+Candidate : Hidden Match
+Visibility: OPEN TO ALL
+Final     : PASS
+Returned  : YES
+
+Viewer    : Requester
+Candidate : Approved Match
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : requester
+Candidate : Approved Match
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : Requester
+Candidate : Unapproved Match
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : requester
+Candidate : Unapproved Match
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : Requester
+Candidate : Hidden Match
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : requester
+Candidate : Hidden Match
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : Requester
+Candidate : Private Match
+Visibility: PRIVATE
+Final     : PASS
+Returned  : YES
+
+Viewer    : Requester
+Candidate : Custom Audience Match
+Visibility: TARGETED MATCHES
+Final     : PASS
+Returned  : YES
+
+Viewer    : Requester
+Candidate : Private Match
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : requester
+Candidate : Private Match
+Contact   : policy=Immediately | state=VISITOR | reveal=YES
+
+Viewer    : New Member
+Candidate : New Member
+Visibility: TARGET_MATCHES
+Age       : PASS
+Final     : PASS
+Returned  : YES
+
+Viewer    : new-member
+Candidate : New Member
+Contact   : policy=Immediately | state=OWNER | reveal=YES

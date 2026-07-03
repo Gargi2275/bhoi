@@ -196,7 +196,7 @@ function AdvertisementsPage() {
                 <div className="h-32 bg-sand relative">
                   {a.image || a.image_url ? (() => {
                     const raw = a.image || a.image_url;
-                    const src = raw.startsWith("http") ? raw : `http://localhost:8000${raw.startsWith("/") ? "" : "/"}${raw}`;
+                    const src = raw.startsWith("http") ? raw : `${raw.startsWith("/") ? "" : "/"}${raw}`;
                     return <img src={src} alt="" className="w-full h-full object-cover" />;
                   })() : (
                     <div className="w-full h-full flex items-center justify-center text-warm-muted text-sm font-bold">No Image Banner</div>
@@ -229,7 +229,7 @@ function AdvertisementsPage() {
                       setAdvertiser(a.advertiser);
                       setDestinationUrl(a.destination_url || "");
                       const rawImg = a.image || a.image_url || "";
-                      setImagePreviewUrl(rawImg && !rawImg.startsWith("http") ? `http://localhost:8000${rawImg.startsWith("/") ? "" : "/"}${rawImg}` : rawImg);
+                      setImagePreviewUrl(rawImg && !rawImg.startsWith("http") ? `${rawImg.startsWith("/") ? "" : "/"}${rawImg}` : rawImg);
                       setImageFile(null);
                       setStartDate(a.start_date || "");
                       setEndDate(a.end_date || "");

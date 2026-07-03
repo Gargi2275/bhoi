@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { Users, UserCheck, Calendar, HandHeart, UsersRound, Building2, CheckCircle, XCircle, AlertCircle, FileText } from "lucide-react";
+import { Users, UserCheck, Calendar, HandHeart, UsersRound, Building2, CheckCircle, XCircle, AlertCircle, FileText, User, GraduationCap, Briefcase, ShieldCheck, MapPin, ChevronDown, ChevronUp } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { PageWrap } from "@/components/wag/PageWrap";
-import { AnimatedCard, AvatarCircle, StatCard, StatusBadge, DetailDrawer, PlanBadge } from "@/components/wag/primitives";
-import { cn, hasPermission } from "@/lib/utils";
+import { AnimatedCard, AvatarCircle, StatCard, StatusBadge, DetailDrawer } from "@/components/wag/primitives";
+import { cn, hasPermission, calculateAge } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { MEMBERS, NEWS } from "@/data/mock";
 import { AdBanner } from "@/components/wag/AdBanner";
@@ -20,12 +21,84 @@ export const Route = createFileRoute("/community-admin/")({
     const [communities, setCommunities] = useState<any[]>([]);
     const [subsidiaries, setSubsidiaries] = useState<any[]>([]);
     const [selectedSub, setSelectedSub] = useState<any | null>(null);
+    const [selectedMember, setSelectedMember] = useState<any | null>(null);
     const [remarks, setRemarks] = useState("");
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [actionLoading, setActionLoading] = useState(false);
 
+    const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+      personal: true, location: true, education: true, profession: true, verification: true
+    });
+
     const [membersList, setMembersList] = useState<any[]>([]);
     const [newsList, setNewsList] = useState<any[]>([]);
+
+    const toggleSection = (key: string) => {
+      setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const handleMemberAction = async (memberId: string, action: 'approve' | 'reject') => {
+      setActionLoading(true);
+      try {
+        if (action === 'approve') {
+          await api.updateMember(memberId, { aadhaar_status: "Approved", status: "Verified" });
+          toast.success("Member approved and verified successfully!");
+        } else if (action === 'reject') {
+          await api.updateMember(memberId, { status: "Rejected" });
+          toast.success("Member rejected.");
+        }
+        fetchData();
+      } catch (err: any) {
+        toast.error(err.message || "Failed to update member.");
+      } finally {
+        setActionLoading(false);
+      }
+    };
+
+    const handleUpdateMember = async (memberId: string, data: any) => {
+      setActionLoading(true);
+      try {
+        const updated = await api.updateMember(memberId, data);
+        setSelectedMember((prev: any) => prev && prev.id === memberId ? { ...prev, ...updated } : prev);
+        fetchData();
+        toast.success("Member updated successfully.");
+      } catch (e: any) {
+        console.error("Failed to update member", e);
+        toast.error(e.message || "Failed to update member.");
+      } finally {
+        setActionLoading(false);
+      }
+    };
+
+    const handleUpdateStatus = async (memberId: string, status: string) => {
+      await handleUpdateMember(memberId, { status });
+    };
+
+    const SectionHeader = ({ icon: Icon, label, sectionKey, color = "text-primary" }: any) => (
+      <button
+        type="button"
+        onClick={() => toggleSection(sectionKey)}
+        className="w-full flex items-center justify-between py-2 px-3 rounded-lg bg-sand/40 hover:bg-sand/70 transition border border-warm/60"
+      >
+        <div className="flex items-center gap-2">
+          <Icon className={`w-3.5 h-3.5 ${color}`} />
+          <span className="text-[11px] font-bold uppercase tracking-wider text-warm-muted">{label}</span>
+        </div>
+        {expandedSections[sectionKey]
+          ? <ChevronUp className="w-3.5 h-3.5 text-warm-muted" />
+          : <ChevronDown className="w-3.5 h-3.5 text-warm-muted" />}
+      </button>
+    );
+
+    const Field = ({ label, value }: { label: string; value?: any }) => {
+      if (value === null || value === undefined || value === "") return null;
+      return (
+        <div className="flex justify-between items-start py-1.5 border-b border-warm/30 last:border-0 gap-3">
+          <span className="text-[11px] text-warm-muted font-medium shrink-0 min-w-[100px]">{label}</span>
+          <span className="text-[12px] font-semibold text-foreground text-right break-words max-w-[200px]">{value}</span>
+        </div>
+      );
+    };
 
     const fetchData = () => {
       if (!user || !user.communityId) return;
@@ -202,7 +275,7 @@ export const Route = createFileRoute("/community-admin/")({
                           {sub.village ? `${sub.village}, ` : ""}{sub.district}, {sub.state}
                         </td>
                         <td className="p-3">
-                          <PlanBadge plan={sub.plan} />
+                          {/* Plan removed */}
                         </td>
                         <td className="p-3 text-right">
                           <button 
@@ -290,9 +363,26 @@ export const Route = createFileRoute("/community-admin/")({
                           <td className="p-3 text-xs">{m.created_at ? new Date(m.created_at).toLocaleDateString() : 'N/A'}</td>
                           {canApproveMembers && (
                             <td className="p-3 text-right">
-                              <button className="px-2 py-1 rounded bg-teal text-white text-xs mr-1"><CheckCircle className="w-3 h-3 inline" /></button>
-                              <button className="px-2 py-1 rounded bg-red-500 text-white text-xs mr-1"><XCircle className="w-3 h-3 inline" /></button>
-                              <button className="px-2 py-1 rounded bg-amber-500 text-white text-xs"><AlertCircle className="w-3 h-3 inline" /></button>
+                              <button
+                                disabled={actionLoading}
+                                onClick={() => handleMemberAction(m.id, 'approve')}
+                                className="px-2 py-1 rounded bg-teal text-white text-xs mr-1 hover:bg-teal-dark transition disabled:opacity-50"
+                              >
+                                <CheckCircle className="w-3 h-3 inline" />
+                              </button>
+                              <button
+                                disabled={actionLoading}
+                                onClick={() => handleMemberAction(m.id, 'reject')}
+                                className="px-2 py-1 rounded bg-red-500 text-white text-xs mr-1 hover:bg-red-650 transition disabled:opacity-50"
+                              >
+                                <XCircle className="w-3 h-3 inline" />
+                              </button>
+                              <button
+                                onClick={() => setSelectedMember(m)}
+                                className="px-2 py-1 rounded bg-amber-500 text-white text-xs hover:bg-amber-600 transition"
+                              >
+                                <AlertCircle className="w-3 h-3 inline" />
+                              </button>
                             </td>
                           )}
                         </tr>
@@ -513,6 +603,246 @@ export const Route = createFileRoute("/community-admin/")({
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+        </DetailDrawer>
+
+        {/* Member Details Drawer */}
+        <DetailDrawer open={!!selectedMember} onClose={() => setSelectedMember(null)} title="Member Details">
+          {selectedMember && (
+            <div className="space-y-4">
+              {/* Profile header */}
+              <div className="text-center pb-4 border-b border-warm">
+                <AvatarCircle name={selectedMember.name} src={selectedMember.avatar || selectedMember.avatar_url} size={80} />
+                <h2 className="font-ui font-bold text-lg mt-3">{selectedMember.name}</h2>
+                <div className="flex items-center justify-center gap-2 mt-1.5 flex-wrap">
+                  <StatusBadge status={selectedMember.status} />
+                  {selectedMember.gender && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      {selectedMember.gender}
+                    </span>
+                  )}
+                  {selectedMember.role && selectedMember.role !== "member" && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gold/10 text-gold border border-gold/20 uppercase">
+                      {selectedMember.role.replace("_", " ")}
+                    </span>
+                  )}
+                </div>
+                {selectedMember.community_name && (
+                  <div className="text-xs text-warm-muted mt-1.5">
+                    📍 {selectedMember.community_name}
+                  </div>
+                )}
+              </div>
+
+              {/* ── PERSONAL INFO ── */}
+              <div className="space-y-2">
+                <SectionHeader icon={User} label="Personal Information" sectionKey="personal" color="text-primary" />
+                {expandedSections.personal && (
+                  <div className="px-1 space-y-0">
+                    <Field label="Full Name" value={selectedMember.name} />
+                    <Field label="Email" value={selectedMember.email} />
+                    <Field label="Phone" value={selectedMember.phone} />
+                    <Field label="Gender" value={selectedMember.gender} />
+                    <Field label="Age" value={(selectedMember.age || calculateAge(selectedMember.birthdate)) ? `${selectedMember.age || calculateAge(selectedMember.birthdate)} years` : null} />
+                    <Field label="Date of Birth" value={selectedMember.birthdate} />
+                    <Field label="Joined On" value={selectedMember.joined_date || selectedMember.joinedDate} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── LOCATION ── */}
+              <div className="space-y-2">
+                <SectionHeader icon={MapPin} label="Location Details" sectionKey="location" color="text-teal" />
+                {expandedSections.location && (
+                  <div className="px-1 space-y-0">
+                    <Field label="Village" value={selectedMember.village} />
+                    <Field label="Taluka" value={selectedMember.taluka} />
+                    <Field label="District" value={selectedMember.district} />
+                    <Field label="State" value={selectedMember.state} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── EDUCATION ── */}
+              <div className="space-y-2">
+                <SectionHeader icon={GraduationCap} label="Education" sectionKey="education" color="text-blue-500" />
+                {expandedSections.education && (
+                  <div className="px-1 space-y-0">
+                    <Field label="Education Level" value={selectedMember.education} />
+                    <Field label="Degree / Qualification" value={selectedMember.degree} />
+                    <Field label="Field of Study" value={selectedMember.field_of_study} />
+                    <Field label="School" value={selectedMember.school} />
+                    <Field label="College / University" value={selectedMember.college} />
+                    <Field label="Passing Year" value={selectedMember.passing_year} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── PROFESSION ── */}
+              <div className="space-y-2">
+                <SectionHeader icon={Briefcase} label="Profession / Work" sectionKey="profession" color="text-gold" />
+                {expandedSections.profession && (
+                  <div className="px-1 space-y-0">
+                    <Field label="Profession Type" value={selectedMember.profession_type} />
+                    <Field label="Job Title" value={selectedMember.job_title} />
+                    <Field label="Company" value={selectedMember.company} />
+                    <Field label="Industry" value={selectedMember.industry} />
+                    <Field label="Annual Salary (LPA)" value={selectedMember.salary} />
+                    <Field label="Work Mode" value={selectedMember.job_work_mode} />
+                    <Field label="Job Type" value={selectedMember.job_type} />
+                    <Field label="Job City" value={selectedMember.job_city} />
+                    <Field label="Job State" value={selectedMember.job_state} />
+                    <Field label="Job Country" value={selectedMember.job_country} />
+                    <Field label="Job Address" value={selectedMember.job_address} />
+                    <Field label="Business Name" value={selectedMember.business_name} />
+                    <Field label="Business Category" value={selectedMember.business_category} />
+                    <Field label="GST Number" value={selectedMember.gst_no} />
+                    <Field label="Years in Business" value={selectedMember.business_years} />
+                    <Field label="Profession (General)" value={selectedMember.profession} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── AADHAAR VERIFICATION ── */}
+              <div className="space-y-2">
+                <SectionHeader icon={ShieldCheck} label="Aadhaar Verification" sectionKey="verification" color="text-red-500" />
+                {expandedSections.verification && (
+                  <div className="px-1 space-y-0">
+                    <div className="flex justify-between items-center py-1.5 border-b border-warm/30">
+                      <span className="text-[11px] text-warm-muted font-medium">Aadhaar Number</span>
+                      <span className="font-mono text-[12px] font-semibold">{selectedMember.aadhaar || "Not provided"}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-1.5">
+                      <span className="text-[11px] text-warm-muted font-medium">Aadhaar Status</span>
+                      <StatusBadge status={selectedMember.aadhaar_status || "Pending"} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── ADMIN ACTIONS ── */}
+              {(() => {
+                const isAuthorized = hasPermission(user, ["Approve Members"]);
+                if (!isAuthorized) {
+                  return (
+                    <div className="p-3 bg-red-50 border border-red-150 rounded-xl text-xs text-red-700 font-medium">
+                      You do not have permission to approve or reject members.
+                    </div>
+                  );
+                }
+
+                return (
+                  <>
+                    {/* Step 1: Aadhaar Verification */}
+                    <div className="bg-sand/50 rounded-xl p-3 border border-warm space-y-2">
+                      <div className="text-xs font-semibold text-warm-muted uppercase tracking-wider">Step 1: Aadhaar ID Status</div>
+                      {selectedMember.aadhaar_status === "Approved" ? (
+                        <div className="flex items-center justify-between bg-teal/10 border border-teal/20 px-3 py-2 rounded-lg text-xs font-medium">
+                          <span className="flex items-center gap-1 text-teal-800">
+                            <CheckCircle className="w-3.5 h-3.5 text-teal" />
+                            Aadhaar Approved & Verified
+                          </span>
+                          <button
+                            disabled={actionLoading}
+                            onClick={() => handleUpdateMember(selectedMember.id, { aadhaar_status: "Rejected" })}
+                            className="text-[10px] text-red-500 hover:underline font-semibold"
+                          >
+                            Reject Aadhaar
+                          </button>
+                        </div>
+                      ) : selectedMember.aadhaar_status === "Rejected" ? (
+                        <div className="flex items-center justify-between bg-red-50 border border-red-200 px-3 py-2 rounded-lg text-xs font-medium">
+                          <span className="flex items-center gap-1 text-red-700">
+                            <XCircle className="w-3.5 h-3.5 text-red-500" />
+                            Aadhaar Rejected
+                          </span>
+                          <button
+                            disabled={actionLoading}
+                            onClick={() => handleUpdateMember(selectedMember.id, { aadhaar_status: "Approved" })}
+                            className="text-[10px] text-teal hover:underline font-semibold"
+                          >
+                            Approve Aadhaar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-xs text-warm-muted leading-relaxed">
+                            Review member's Aadhaar details above, then approve or reject.
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              disabled={actionLoading}
+                              onClick={() => handleUpdateMember(selectedMember.id, { aadhaar_status: "Approved" })}
+                              className="flex-1 py-1.5 rounded-lg bg-teal text-white text-xs font-medium flex items-center justify-center gap-1 hover:bg-teal-dark transition disabled:opacity-50"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5" /> Approve Aadhaar
+                            </button>
+                            <button
+                              disabled={actionLoading}
+                              onClick={() => handleUpdateMember(selectedMember.id, { aadhaar_status: "Rejected" })}
+                              className="flex-1 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium flex items-center justify-center gap-1 hover:bg-red-650 transition disabled:opacity-50"
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Reject Aadhaar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Step 2: Profile Approval */}
+                    <div className="bg-sand/50 rounded-xl p-3 border border-warm space-y-2">
+                      <div className="text-xs font-semibold text-warm-muted uppercase tracking-wider">Step 2: Profile Status</div>
+                      {selectedMember.aadhaar_status !== "Approved" ? (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                          <span>Approve Aadhaar first to enable profile approval options.</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {["Verified", "Active"].includes(selectedMember.status) ? (
+                            <div className="bg-teal/10 border border-teal/20 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1 text-teal-800">
+                              <CheckCircle className="w-3.5 h-3.5 text-teal" />
+                              Profile Approved & Active
+                            </div>
+                          ) : selectedMember.status === "Rejected" ? (
+                            <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1">
+                              <XCircle className="w-3.5 h-3.5 text-red-500" /> Profile Rejected
+                            </div>
+                          ) : selectedMember.status === "Suspended" ? (
+                            <div className="bg-gray-100 border border-gray-200 text-gray-700 px-3 py-2 rounded-lg text-xs font-medium">
+                              Profile Suspended
+                            </div>
+                          ) : (
+                            <div className="text-xs text-warm-muted">Aadhaar verified. Approve or reject this member's profile.</div>
+                          )}
+
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            {!["Verified", "Active"].includes(selectedMember.status) && (
+                              <button
+                                disabled={actionLoading}
+                                onClick={() => handleUpdateStatus(selectedMember.id, "Verified")}
+                                className="py-2 rounded-lg bg-teal text-white text-sm flex items-center justify-center gap-1 hover:bg-teal-dark transition disabled:opacity-50"
+                              >
+                                <CheckCircle className="w-4 h-4" /> Approve Profile
+                              </button>
+                            )}
+                            {selectedMember.status !== "Rejected" && (
+                              <button
+                                disabled={actionLoading}
+                                onClick={() => handleUpdateStatus(selectedMember.id, "Rejected")}
+                                className="py-2 rounded-lg bg-red-500 text-white text-sm flex items-center justify-center gap-1 hover:bg-red-650 transition disabled:opacity-50"
+                              >
+                                <XCircle className="w-4 h-4" /> Reject Profile
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </DetailDrawer>

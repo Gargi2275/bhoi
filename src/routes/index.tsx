@@ -534,6 +534,8 @@ function DashboardStyleHome() {
   const [dirLocation, setDirLocation] = useState("All Locations");
 
   const visibleJobs = (jobList.length ? jobList : DASHBOARD_JOBS).slice(0, 4);
+  const displaySamachar = news.length > 0 ? news : SAMACHAR_ITEMS;
+  const displayEvents = eventList.length > 0 ? eventList : EVENTS_ITEMS;
   const quickAccessItems = sidebarItems
     .filter((item) => ["Samachar", "Matrimony", "Jobs", "Events", "Directory", "Gallery", "Videos", "Donations"].includes(item.label))
     .map((item, index) => ({
@@ -915,20 +917,35 @@ function DashboardStyleHome() {
                               transform: 'translate3d(0,0,0)',
                             }}
                           >
-                            {[...SAMACHAR_ITEMS, ...SAMACHAR_ITEMS].map((item, idx) => (
-                              <article key={`${item.id}-${idx}`} onMouseEnter={() => setSamacharPaused(true)} onMouseLeave={() => setSamacharPaused(false)} onClick={() => setSelectedNews(item)} className="group w-64 bg-[#FFFDFB] rounded-2xl border border-[#EBE3DB]/80 overflow-hidden shadow-sm hover:shadow-md hover:border-[#F97316]/35 hover:-translate-y-0.5 transition-all duration-300 cursor-pointer">
-                                <div className="relative overflow-hidden h-24">
-                                  <img src={item.img} alt={t(item.title)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                </div>
-                                <div className="p-3.5 space-y-1.5 text-left">
-                                  <h4 className="text-xs font-bold leading-snug line-clamp-2 text-[#3E2723] group-hover:text-[#F97316] transition-colors duration-200">{t(item.title)}</h4>
-                                  <div className="flex items-center justify-between text-[10px] text-warm-muted pt-1 border-t border-[#FAF3EC]">
-                                    <span className="flex items-center gap-0.5"><MapPin className="w-3 h-3 text-[#F97316]" />{t(item.location)}</span>
-                                    <span>{t(item.time)}</span>
+                            {[...displaySamachar, ...displaySamachar].map((item, idx) => {
+                              const displayImg = getImageUrl(item.img || item.img_url);
+                              const displayLocation = item.location || item.community_name || "Samaj";
+                              const formatDate = (dateStr: string) => {
+                                if (!dateStr) return "";
+                                try {
+                                  const d = new Date(dateStr);
+                                  if (isNaN(d.getTime())) return dateStr;
+                                  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+                                } catch (e) {
+                                  return dateStr;
+                                }
+                              };
+                              const displayTime = item.time || formatDate(item.date);
+                              return (
+                                <article key={`${item.id}-${idx}`} onMouseEnter={() => setSamacharPaused(true)} onMouseLeave={() => setSamacharPaused(false)} onClick={() => setSelectedNews(item)} className="group w-64 bg-[#FFFDFB] rounded-2xl border border-[#EBE3DB]/80 overflow-hidden shadow-sm hover:shadow-md hover:border-[#F97316]/35 hover:-translate-y-0.5 transition-all duration-300 cursor-pointer">
+                                  <div className="relative overflow-hidden h-24">
+                                    <img src={displayImg} alt={t(item.title)} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                                   </div>
-                                </div>
-                              </article>
-                            ))}
+                                  <div className="p-3.5 space-y-1.5 text-left">
+                                    <h4 className="text-xs font-bold leading-snug line-clamp-2 text-[#3E2723] group-hover:text-[#F97316] transition-colors duration-200">{t(item.title)}</h4>
+                                    <div className="flex items-center justify-between text-[10px] text-warm-muted pt-1 border-t border-[#FAF3EC]">
+                                      <span className="flex items-center gap-0.5"><MapPin className="w-3 h-3 text-[#F97316]" />{t(displayLocation)}</span>
+                                      <span>{t(displayTime)}</span>
+                                    </div>
+                                  </div>
+                                </article>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
@@ -1125,20 +1142,37 @@ function DashboardStyleHome() {
                         </div>
 
                         <div ref={eventTrackRef} className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2">
-                          {EVENTS_ITEMS.map((ev, i) => (
-                            <motion.article key={i} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.25, delay: i * 0.04 }} className="min-w-[260px] snap-start rounded-2xl border border-[#F3E8DE] bg-[#FFFDFB] p-3 shadow-sm hover:shadow-md transition">
-                              <div className="flex items-center gap-3 group cursor-pointer" onClick={() => handleNavClick("Events")}>
-                                <div className="w-10 h-10 rounded-xl bg-[#FFF5EE] border border-[#F3E8DE] flex flex-col items-center justify-center flex-shrink-0 group-hover:border-[#F97316]/30 group-hover:bg-[#FDF2E9] transition duration-200">
-                                  <span className="text-xs font-extrabold text-[#F97316] leading-none">{t(ev.day)}</span>
-                                  <span className="text-[8px] font-bold text-warm-muted leading-none mt-0.5">{t(ev.month)}</span>
+                          {displayEvents.map((ev, i) => {
+                            let day = ev.day;
+                            let month = ev.month;
+                            if (ev.date) {
+                              try {
+                                const d = new Date(ev.date);
+                                if (!isNaN(d.getTime())) {
+                                  day = d.getDate().toString().padStart(2, "0");
+                                  month = d.toLocaleDateString("en-IN", { month: "short" }).toUpperCase();
+                                }
+                              } catch (e) {
+                                // use default values if parsing fails
+                              }
+                            }
+                            const displayLocation = ev.venue || ev.location || "Samaj";
+                            const displayTime = ev.time || ev.start_time || "10:00 AM";
+                            return (
+                              <motion.article key={ev.id || i} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.25, delay: i * 0.04 }} className="min-w-[260px] snap-start rounded-2xl border border-[#F3E8DE] bg-[#FFFDFB] p-3 shadow-sm hover:shadow-md transition">
+                                <div className="flex items-center gap-3 group cursor-pointer" onClick={() => handleNavClick("Events")}>
+                                  <div className="w-10 h-10 rounded-xl bg-[#FFF5EE] border border-[#F3E8DE] flex flex-col items-center justify-center flex-shrink-0 group-hover:border-[#F97316]/30 group-hover:bg-[#FDF2E9] transition duration-200">
+                                    <span className="text-xs font-extrabold text-[#F97316] leading-none">{t(day)}</span>
+                                    <span className="text-[8px] font-bold text-warm-muted leading-none mt-0.5">{t(month)}</span>
+                                  </div>
+                                  <div className="text-xs leading-snug text-left min-w-0 flex-1">
+                                    <h4 className="font-bold text-[#3E2723] line-clamp-1 group-hover:text-[#F97316] transition duration-200">{t(ev.title)}</h4>
+                                    <p className="text-[9px] text-warm-muted flex items-center gap-0.5 mt-0.5 truncate"><MapPin className="w-2.5 h-2.5 text-[#F97316]" /> {t(displayLocation)} · {t(displayTime)}</p>
+                                  </div>
                                 </div>
-                                <div className="text-xs leading-snug text-left">
-                                  <h4 className="font-bold text-[#3E2723] line-clamp-1 group-hover:text-[#F97316] transition duration-200">{t(ev.title)}</h4>
-                                  <p className="text-[9px] text-warm-muted flex items-center gap-0.5 mt-0.5"><MapPin className="w-2.5 h-2.5 text-[#F97316]" /> {t(ev.location)} · {t(ev.time)}</p>
-                                </div>
-                              </div>
-                            </motion.article>
-                          ))}
+                              </motion.article>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -1463,48 +1497,69 @@ function DashboardStyleHome() {
                     <h2 className="text-2xl font-bold text-[#3E2723]">{t("dashboardevents.title_events")}</h2>
                     <span className="text-xs text-warm-muted">{t("dashboardevents.desc_sammelanSportsMarriagesAndMore")}</span>
                   </div>
-                  <div className="grid md:grid-cols-3 gap-5">
-                    {eventList.slice(0, 6).map((ev: any, i) => (
-                      <div key={i} className="bg-white border border-[#EBE3DB] rounded-2xl overflow-hidden shadow-sm flex flex-col justify-between hover:shadow-md transition">
-                        <img src={ev.img ?? "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=400&h=200&fit=crop"} alt="" className="w-full h-40 object-cover" />
-                        <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                          <div>
-                            <div className="text-[10px] text-[#F97316] font-bold">{t(ev.date)} · {t(ev.venue)}</div>
-                            <h3 className="font-bold text-sm text-[#3E2723] mt-1">{t(ev.title)}</h3>
-                            <p className="text-xs text-warm-muted line-clamp-2 mt-1">{t(ev.desc)}</p>
-                          </div>
-                          <div className="flex items-center justify-between border-t border-[#F3E8DE] pt-3">
-                            <span className="text-[10px] text-warm-muted">{ev.attendees} {t("Attending")}</span>
-                            <button
-                              onClick={() => {
-                                if (ev.registered) {
-                                  const copy = [...eventList];
-                                  copy[i].registered = false;
-                                  copy[i].attendees = Math.max(0, (copy[i].attendees || 0) - 1);
-                                  setEventList(copy);
-                                  toast.success(`Unregistered from ${ev.title}`);
-                                } else {
-                                  setRegisteringEvent({ event: ev, index: i });
-                                  setRegForm({
-                                    name: userProfile.name,
-                                    email: userProfile.email,
-                                    phone: userProfile.phone,
-                                    attendees: 1
-                                  });
-                                }
-                              }}
-                              className={`text-xs px-3.5 py-1.5 rounded-full font-semibold transition cursor-pointer ${ev.registered
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-[#F97316] text-white hover:bg-[#EA580C]"
-                                }`}
-                            >
-                              {ev.registered ? t("Registered") + " ✓" : t("dashboardevents.register")}
-                            </button>
+                  {loading ? (
+                    <div className="grid md:grid-cols-3 gap-5">
+                      {[1,2,3,4,5,6].map(i => (
+                        <div key={i} className="bg-white border border-[#EBE3DB] rounded-2xl overflow-hidden animate-pulse shadow-sm">
+                          <div className="h-40 bg-[#F3E8DE]" />
+                          <div className="p-4 space-y-2">
+                            <div className="h-3 w-24 bg-[#F3E8DE] rounded" />
+                            <div className="h-4 w-3/4 bg-[#F3E8DE] rounded" />
+                            <div className="h-3 w-1/2 bg-[#F3E8DE] rounded" />
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : displayEvents.length === 0 ? (
+                    <div className="bg-white border border-[#EBE3DB] rounded-2xl p-12 text-center shadow-sm">
+                      <Calendar className="w-10 h-10 text-[#F97316] mx-auto mb-3 opacity-50" />
+                      <h3 className="font-bold text-[#3E2723] text-base">No Upcoming Events</h3>
+                      <p className="text-xs text-warm-muted mt-1">Check back soon for new community events.</p>
+                    </div>
+                  ) : (
+                    <div className="grid md:grid-cols-3 gap-5">
+                      {displayEvents.slice(0, 6).map((ev: any, i) => (
+                        <div key={i} className="bg-white border border-[#EBE3DB] rounded-2xl overflow-hidden shadow-sm flex flex-col justify-between hover:shadow-md transition">
+                          <img src={ev.img ?? ev.image ?? ev.cover ?? "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=400&h=200&fit=crop"} alt="" className="w-full h-40 object-cover" />
+                          <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                            <div>
+                              <div className="text-[10px] text-[#F97316] font-bold">{ev.date ? new Date(ev.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : (ev.day && ev.month ? `${ev.day} ${ev.month}` : "TBD")} · {ev.venue || ev.location || ev.city || "Community Hall"}</div>
+                              <h3 className="font-bold text-sm text-[#3E2723] mt-1">{ev.title}</h3>
+                              <p className="text-xs text-warm-muted line-clamp-2 mt-1">{ev.desc || ev.description}</p>
+                            </div>
+                            <div className="flex items-center justify-between border-t border-[#F3E8DE] pt-3">
+                              <span className="text-[10px] text-warm-muted">{ev.attendees || ev.registered_count || 0} {t("Attending")}</span>
+                              <button
+                                onClick={() => {
+                                  if (ev.registered) {
+                                    const copy = [...eventList];
+                                    copy[i].registered = false;
+                                    copy[i].attendees = Math.max(0, (copy[i].attendees || 0) - 1);
+                                    setEventList(copy);
+                                    toast.success(`Unregistered from ${ev.title}`);
+                                  } else {
+                                    setRegisteringEvent({ event: ev, index: i });
+                                    setRegForm({
+                                      name: userProfile.name,
+                                      email: userProfile.email,
+                                      phone: userProfile.phone,
+                                      attendees: 1
+                                    });
+                                  }
+                                }}
+                                className={`text-xs px-3.5 py-1.5 rounded-full font-semibold transition cursor-pointer ${ev.registered
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-[#F97316] text-white hover:bg-[#EA580C]"
+                                  }`}
+                              >
+                                {ev.registered ? t("Registered") + " ✓" : t("dashboardevents.register")}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -2248,23 +2303,27 @@ function DashboardStyleHome() {
 
       {/* --- INTERACTIVE MODALS --- */}
 
-      {/* 1. News Detail Modal */}
       {selectedNews && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white border border-[#EBE3DB] rounded-3xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 space-y-4 relative shadow-2xl text-left">
             <button onClick={() => setSelectedNews(null)} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-[#FAF3EC] flex items-center justify-center hover:bg-[#FDF2E9] hover:text-[#F97316] transition">
               <X className="w-4 h-4" />
             </button>
-            <img src={selectedNews.img} alt="" className="w-full h-48 object-cover rounded-2xl shadow-xs" />
+            <img src={getImageUrl(selectedNews.img || selectedNews.img_url)} alt="" className="w-full h-48 object-cover rounded-2xl shadow-xs" />
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-[#F97316] bg-[#FFF5EE] px-2.5 py-0.5 rounded-full">{selectedNews.category}</span>
               <h3 className="font-extrabold text-base text-[#3E2723] mt-2 leading-snug">{selectedNews.title}</h3>
-              <p className="text-xs text-warm-muted mt-1 font-medium">Published on {selectedNews.date || "Today"} · {selectedNews.location || "General"}</p>
+              <p className="text-xs text-warm-muted mt-1 font-medium">Published on {selectedNews.date || "Today"} · {selectedNews.location || selectedNews.community_name || "General"}</p>
             </div>
             <p className="text-xs text-warm-muted leading-relaxed whitespace-pre-line">
-              {selectedNews.excerpt} Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam nec finibus ex. Praesent hendrerit sem sem, ac elementum lacus sollicitudin eu. Phasellus mollis lectus sit amet dui viverra pulvinar. Proin non elit ac lectus iaculis dictum.
-              <br /><br />
-              Sed ac finibus neque, sit amet feugiat ex. Quisque pretium lorem ex, eget imperdiet erat commodo at. Duis consequat accumsan scelerisque. Curabitur vitae purus eleifend, iaculis erat sit amet, sodales erat.
+              {selectedNews.excerpt}
+              {typeof selectedNews.id === "string" && selectedNews.id.startsWith("s") && (
+                <>
+                  {" "}Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam nec finibus ex. Praesent hendrerit sem sem, ac elementum lacus sollicitudin eu. Phasellus mollis lectus sit amet dui viverra pulvinar. Proin non elit ac lectus iaculis dictum.
+                  <br /><br />
+                  Sed ac finibus neque, sit amet feugiat ex. Quisque pretium lorem ex, eget imperdiet erat commodo at. Duis consequat accumsan scelerisque. Curabitur vitae purus eleifend, iaculis erat sit amet, sodales erat.
+                </>
+              )}
             </p>
           </motion.div>
         </div>

@@ -185,6 +185,7 @@ SIMPLE_JWT = {
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Matrimony matching feature flag.
-# OPEN_TEST: show every non-deleted, non-suspended profile except the current user's own profile.
+# OPEN_TEST / OPEN_TESTING: show every non-deleted, non-suspended profile except the current user's own profile.
 # SMART_MATCHING: use preference, audience, hierarchy, and visibility rules.
-MATCHING_MODE = os.environ.get('MATCHING_MODE', 'OPEN_TEST')
+# NOTE: Configure in backend/.env — defaults to OPEN_TESTING for development.
+MATCHING_MODE = os.environ.get('MATCHING_MODE', 'OPEN_TESTING')

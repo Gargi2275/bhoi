@@ -1,4 +1,5 @@
 from rest_framework import viewsets, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -88,13 +89,13 @@ try:
         if otp_data.get('expiry_time') and otp_data['expiry_time'] > now:
             if not has_active:
                 import sys
-                sys.stderr.write("\n============================================================\n")
-                sys.stderr.write("ACTIVE OTP SESSIONS RETRIEVED FROM PERSISTENT STORE:\n")
+                print(f"\n{'='*60}")
+                print("[OTP] ACTIVE OTP SESSIONS (RESTORED FROM PERSISTENT STORE)")
                 has_active = True
-            sys.stderr.write(f"- Email: {email} | OTP: {otp_data.get('otp')} | Purpose: {otp_data.get('purpose')} | Expiry: {otp_data.get('expiry_time')}\n")
+            print(f"[OTP] Email: {email} | Code: {otp_data.get('otp')} | Purpose: {otp_data.get('purpose')} | Expiry: {otp_data.get('expiry_time')}")
     if has_active:
-        sys.stderr.write("============================================================\n\n")
-        sys.stderr.flush()
+        print(f"{'='*60}\n")
+        sys.stdout.flush()
 except Exception as e:
     print(f"Error printing active OTPs on startup: {e}")
 
@@ -104,7 +105,10 @@ from .models import (
     News, Family, FamilyMember, EventRegistration,
     CommunityApprovalHistory, Notification, SubscriptionPlan, Role, Advertisement, Gallery,
     PartnerPreference, ProfileVisibility, InterestRequest, Wishlist, ProfileView,
-    CommunityActivityLog, MatrimonyPhoto, MatrimonyAuditLog, JobApplication
+    CommunityActivityLog, MatrimonyPhoto, MatrimonyAuditLog, JobApplication,
+    FeatureMaster, PlanFeaturePermission, CommunitySubscription, SubscriptionHistory,
+    PlanAddon, FeatureUsage, SubscriptionAuditLog,
+    ApplicationModule, ApplicationAction, ModuleAction, ApplicationModuleAuditLog
 )
 from .serializers import (
     CommunitySerializer, MemberSerializer, UserSerializer,
@@ -115,8 +119,56 @@ from .serializers import (
     SubscriptionPlanSerializer, RoleSerializer, AdvertisementSerializer, GallerySerializer,
     PartnerPreferenceSerializer, ProfileVisibilitySerializer, InterestRequestSerializer,
     WishlistSerializer, ProfileViewSerializer, MatrimonyPhotoSerializer, MatrimonyAuditLogSerializer,
-    JobApplicationSerializer
+    JobApplicationSerializer,
+    FeatureMasterSerializer, PlanFeaturePermissionSerializer, CommunitySubscriptionSerializer,
+    SubscriptionHistorySerializer, PlanAddonSerializer, FeatureUsageSerializer,
+    SubscriptionAuditLogSerializer,
+    ApplicationModuleSerializer, ApplicationActionSerializer, ModuleActionSerializer,
+    ApplicationModuleAuditLogSerializer
 )
+
+from rest_framework.permissions import BasePermission
+from rest_framework.exceptions import PermissionDenied
+
+class MemberPremiumModulePermission(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        member = getattr(request.user, 'member_profile', None)
+        if request.user.is_superuser or (member and member.role in ['super_admin', 'community_admin']):
+            return True
+        if not member:
+            return True
+            
+        view_name = view.__class__.__name__
+        mapping = {
+            'ConversationViewSet': ('UNLIMITED_CHAT', 'Messaging'),
+            'MessageViewSet': ('UNLIMITED_CHAT', 'Messaging'),
+            'MessageRequestViewSet': ('UNLIMITED_CHAT', 'Messaging'),
+            'MatrimonyProfileViewSet': ('MATRIMONY_INTERESTS', 'Matrimony'),
+            'JobViewSet': ('JOBS_UNLIMITED_APPLY', 'Jobs'),
+            'BusinessViewSet': ('BUSINESS_PROMOTIONS', 'Business'),
+            'EventViewSet': ('EVENTS_UNLIMITED', 'Events'),
+            'VenueBookingViewSet': ('VENUE_BOOKING_ENABLED', 'Venue Booking'),
+            'BookingPropertyViewSet': ('VENUE_BOOKING_ENABLED', 'Venue Booking'),
+            'DonationViewSet': ('DONATIONS_ENABLED', 'Donations'),
+            'FundraisingCampaignViewSet': ('DONATIONS_ENABLED', 'Donations'),
+            'AdvertisementViewSet': ('BUSINESS_ADS', 'Advertisements'),
+        }
+        
+        res = mapping.get(view_name)
+        if res:
+            feature_code, module_name = res
+            from .views import check_member_feature_limit
+            has_access, err_msg = check_member_feature_limit(member, feature_code, increment=False)
+            if not has_access:
+                raise PermissionDenied({
+                    "detail": f"Access to {module_name} is restricted. {err_msg}",
+                    "upgrade_required": True
+                })
+                
+        return True
 
 BOOKING_ACTIVE_STATUSES = ['Pending Approval', 'Pending Payment', 'Confirmed', 'Checked In', 'Refund Requested']
 
@@ -263,12 +315,12 @@ def _availability_for_resources(property_obj, resource_ids, start_dt, end_dt, ex
         })
     return all_available, details
 
-def _calculate_booking_price(resources, start_dt, end_dt, extra_charges=0):
+def _calculate_booking_price(resources, start_dt, end_dt, extra_charges=0, tax_percentage=18.0, property_deposit=0):
     hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
     days = Decimal(str(max(1, (end_dt.date() - start_dt.date()).days + 1)))
     resource_lines = []
     subtotal = Decimal('0.00')
-    deposit = Decimal('0.00')
+    deposit = Decimal(str(property_deposit))
 
     for res in resources:
         hourly = _money(res.hourly_rate)
@@ -305,7 +357,7 @@ def _calculate_booking_price(resources, start_dt, end_dt, extra_charges=0):
 
     extra = _money(extra_charges)
     taxable = subtotal + extra
-    tax = (taxable * Decimal('0.18')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    tax = (taxable * (Decimal(str(tax_percentage)) / Decimal('100'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     total = taxable + tax + deposit
     return {
         'resources': resource_lines,
@@ -338,7 +390,7 @@ def enforce_community_isolation(request, queryset, community_field='community_id
     return queryset
 
 def filter_by_community(queryset, community_id, community_field='community_id'):
-    if not community_id:
+    if not community_id or str(community_id).lower() in ('any', 'all', 'null', 'undefined'):
         return queryset
     if ',' in str(community_id):
         try:
@@ -484,25 +536,43 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         username = attrs.get(self.username_field)
         password = attrs.get("password")
         try:
-            # Try to resolve user by username, email, or member phone
+            # Try to resolve user by username, email, or member phone/email case-insensitively
             user = None
-            try:
-                user = User.objects.get(username=username)
-            except User.DoesNotExist:
+            if username:
+                clean_username = username.strip()
                 try:
-                    user = User.objects.get(email=username)
+                    user = User.objects.get(username__iexact=clean_username)
                 except User.DoesNotExist:
                     try:
-                        member = Member.objects.get(phone=username)
-                        user = member.user
-                    except Member.DoesNotExist:
-                        pass
+                        user = User.objects.get(email__iexact=clean_username)
+                    except User.DoesNotExist:
+                        try:
+                            member = Member.objects.get(email__iexact=clean_username)
+                            user = member.user
+                        except Member.DoesNotExist:
+                            try:
+                                member = Member.objects.get(phone__iexact=clean_username)
+                                user = member.user
+                            except Member.DoesNotExist:
+                                pass
+            
+            if not user:
+                from rest_framework import serializers
+                raise serializers.ValidationError({
+                    "detail": "No account found with this email, phone, or username."
+                })
+            
+            # Update attrs username with the actual username so super().validate(attrs) works
+            attrs[self.username_field] = user.username
+            
+            if not user.check_password(password):
+                from rest_framework import serializers
+                raise serializers.ValidationError({
+                    "detail": "Incorrect password. Please try again."
+                })
             
             if user:
-                # Update attrs username with the actual username so super().validate(attrs) works
-                attrs[self.username_field] = user.username
-                
-                if user.check_password(password):
+                if True: # wrapper to match indent of original code
                     try:
                         member = user.member_profile
                         if not member.email_verified:
@@ -772,8 +842,13 @@ class RegisterView(APIView):
                 'purpose': 'register'
             }
             import sys
-            sys.stderr.write(f"\n============================================================\n[REGISTRATION OTP] Email: {user.email} | OTP: {otp_code} | Expiry: {expiry_time}\n============================================================\n")
-            sys.stderr.flush()
+            print(f"\n{'='*60}")
+            print(f"[OTP] REGISTRATION OTP")
+            print(f"[OTP] Email   : {user.email}")
+            print(f"[OTP] Code    : {otp_code}")
+            print(f"[OTP] Expiry  : {expiry_time}")
+            print(f"{'='*60}\n")
+            sys.stdout.flush()
             from .emails import send_project_email
             try:
                 send_project_email(
@@ -1123,8 +1198,13 @@ class CommunityViewSet(viewsets.ModelViewSet):
                 'purpose': 'register'
             }
             import sys
-            sys.stderr.write(f"\n============================================================\n[REGISTRATION OTP] Email: {admin_email} | OTP: {otp_code} | Expiry: {expiry_time}\n============================================================\n")
-            sys.stderr.flush()
+            print(f"\n{'='*60}")
+            print(f"[OTP] COMMUNITY ADMIN REGISTRATION OTP")
+            print(f"[OTP] Email   : {admin_email}")
+            print(f"[OTP] Code    : {otp_code}")
+            print(f"[OTP] Expiry  : {expiry_time}")
+            print(f"{'='*60}\n")
+            sys.stdout.flush()
             from .emails import send_project_email
             try:
                 send_project_email(
@@ -1806,7 +1886,7 @@ class CommitteeViewSet(viewsets.ModelViewSet):
 class EventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all().order_by('-date')
     serializer_class = EventSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.AllowAny, HasCustomRolePermission, MemberPremiumModulePermission]
     
     def get_queryset(self):
         queryset = Event.objects.all().order_by('-date')
@@ -1829,7 +1909,7 @@ class EventViewSet(viewsets.ModelViewSet):
 class JobViewSet(viewsets.ModelViewSet):
     queryset = Job.objects.all().order_by('-posted_date')
     serializer_class = JobSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.AllowAny, HasCustomRolePermission, MemberPremiumModulePermission]
 
     def get_queryset(self):
         queryset = Job.objects.all().order_by('-posted_date')
@@ -1939,6 +2019,13 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
         if not member:
             return Response({"error": "Only community members can apply for jobs"}, status=400)
             
+        try:
+            has_access, err_msg = check_member_feature_limit(member, "JOBS_UNLIMITED_APPLY", increment=True)
+            if not has_access:
+                return Response({"detail": err_msg, "upgrade_required": True}, status=status.HTTP_403_FORBIDDEN)
+        except Exception:
+            pass
+            
         if JobApplication.objects.filter(job_id=job_id, member=member).exists():
             return Response({"error": "You have already applied for this job"}, status=400)
             
@@ -2039,7 +2126,18 @@ class JobApplicationViewSet(viewsets.ModelViewSet):
 class BusinessViewSet(viewsets.ModelViewSet):
     queryset = Business.objects.all().order_by('-featured', '-rating', '-id')
     serializer_class = BusinessSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.AllowAny, HasCustomRolePermission, MemberPremiumModulePermission]
+
+    def create(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            try:
+                member = request.user.member_profile
+                has_access, err_msg = check_member_feature_limit(member, "BUSINESS_PROMOTIONS", increment=True)
+                if not has_access:
+                    return Response({"detail": err_msg, "upgrade_required": True}, status=status.HTTP_403_FORBIDDEN)
+            except Exception:
+                pass
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         instance = serializer.save()
@@ -2144,7 +2242,7 @@ class BusinessViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get('search')
         
         if community_id:
-            queryset = queryset.filter(community_id=community_id)
+            queryset = filter_by_community(queryset, community_id)
         if category and category != 'All':
             queryset = queryset.filter(category=category)
         if verified:
@@ -2208,10 +2306,58 @@ def get_descendants_for_community(community):
         stack.extend(list(curr.subsidiaries.all()))
     return descendants
 
+from rest_framework.pagination import PageNumberPagination
+
+class OptionalPageNumberPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+    def paginate_queryset(self, queryset, request, view=None):
+        if 'page' not in request.query_params and 'page_size' not in request.query_params:
+            return None
+        return super().paginate_queryset(queryset, request, view)
+
 class MatrimonyProfileViewSet(viewsets.ModelViewSet):
     queryset = MatrimonyProfile.objects.filter(deleted_at__isnull=True).order_by('-id')
     serializer_class = MatrimonyProfileSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.AllowAny, HasCustomRolePermission, MemberPremiumModulePermission]
+    pagination_class = OptionalPageNumberPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = MatrimonyProfile.objects.filter(deleted_at__isnull=True).order_by('-id')
+        
+        is_admin = False
+        if user and user.is_authenticated:
+            if user.is_superuser:
+                is_admin = True
+            else:
+                try:
+                    member = user.member_profile
+                    if member.role in ('community_admin', 'super_admin'):
+                        is_admin = True
+                except Exception:
+                    pass
+
+        if not is_admin:
+            if user and user.is_authenticated:
+                queryset = queryset.filter(
+                    Q(status__in=['Approved', 'Active', 'Featured']) | Q(user=user)
+                )
+            else:
+                queryset = queryset.filter(status__in=['Approved', 'Active', 'Featured'])
+
+        # Exclude blocked users (both ways)
+        if user and user.is_authenticated:
+            from api.models import BlockedUser
+            blocked_user_ids = list(BlockedUser.objects.filter(user=user).values_list('blocked_user_id', flat=True))
+            blocked_by_ids = list(BlockedUser.objects.filter(blocked_user=user).values_list('user_id', flat=True))
+            all_blocked = set(blocked_user_ids + blocked_by_ids)
+            if all_blocked:
+                queryset = queryset.exclude(user_id__in=all_blocked)
+
+        return queryset
 
     def _matching_mode(self):
         return getattr(settings, 'MATCHING_MODE', 'SMART_MATCHING')
@@ -2222,33 +2368,20 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
     def _open_test_profiles(self):
         return MatrimonyProfile.objects.filter(
             deleted_at__isnull=True,
-            status__in=['Approved', 'Active', 'Featured']
-        )
+        ).exclude(status='Suspended')
 
 
     def _open_testing_exclusion_reason(self, profile, current_user=None):
         if profile.deleted_at is not None:
             return 'deleted_profile'
-        if current_user and current_user.is_authenticated:
-            # Check if viewer has an approved profile (admins allowed)
-            is_admin = current_user.is_superuser
-            if not is_admin:
-                try:
-                    member = current_user.member_profile
-                    if member.role in ('community_admin', 'super_admin'):
-                        is_admin = True
-                except Exception:
-                    pass
-            
-            if not is_admin:
-                if profile.user_id == current_user.id:
-                    return None
-                viewer_profile = MatrimonyProfile.objects.filter(user=current_user, deleted_at__isnull=True).first()
-                if not viewer_profile or viewer_profile.status not in ('Approved', 'Active', 'Featured'):
-                    return 'viewer_not_approved'
 
-        if profile.status not in ('Approved', 'Active', 'Featured'):
-            return f"status_excluded:{profile.status}"
+        if profile.status == 'Suspended':
+            return 'status_excluded:Suspended'
+
+        if current_user and current_user.is_authenticated:
+            if profile.user_id == current_user.id:
+                return 'same_user'
+
         return None
 
 
@@ -2286,16 +2419,26 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                     profile.deleted_at is not None,
                 )
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        visible_profiles = []
+        from api.privacy_visibility_engine import PrivacyVisibilityEngine
+        for profile in queryset:
+            if profile.deleted_at is not None:
+                continue
+            if PrivacyVisibilityEngine.canDiscoverProfile(profile, request.user):
+                visible_profiles.append(profile)
+        page = self.paginate_queryset(visible_profiles)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(visible_profiles, many=True)
+        return Response(serializer.data)
+
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        if self._open_testing_enabled():
-            if instance.user_id == getattr(request.user, 'id', None) or not self._open_testing_exclusion_reason(instance, request.user):
-                serializer = self.get_serializer(instance)
-                return Response(serializer.data)
-            return Response({'detail': 'You do not have permission to view this profile.'}, status=status.HTTP_403_FORBIDDEN)
-
-        # Enforce visibility on direct profile URL access
-        if not instance.is_visible_to_user(request.user):
+        from api.privacy_visibility_engine import PrivacyVisibilityEngine
+        if not PrivacyVisibilityEngine.canViewProfile(instance, request.user):
             return Response({'detail': 'You do not have permission to view this profile.'}, status=status.HTTP_403_FORBIDDEN)
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
@@ -2350,13 +2493,20 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         profiles = MatrimonyProfile.objects.filter(community_id=community_id, deleted_at__isnull=True)
         
         # Calculate stats
-        total_profiles = profiles.count()
-        ready_for_review = profiles.filter(status='Ready For Review').count()
-        active = profiles.filter(status='Active').count()
-        featured = profiles.filter(status='Featured').count()
-        rejected = profiles.filter(status='Rejected').count()
+        from django.db.models import Count, Q
+        stats = profiles.aggregate(
+            total_profiles=Count('id'),
+            ready_for_review=Count('id', filter=Q(status='Ready For Review')),
+            active=Count('id', filter=Q(status='Active')),
+            featured=Count('id', filter=Q(status='Featured')),
+            rejected=Count('id', filter=Q(status='Rejected'))
+        )
+        total_profiles = stats['total_profiles']
+        ready_for_review = stats['ready_for_review']
+        active = stats['active']
+        featured = stats['featured']
+        rejected = stats['rejected']
         
-        from django.db.models import Q
         profile_ids = list(profiles.values_list('id', flat=True))
         
         interests_sent = InterestRequest.objects.filter(sender_id__in=profile_ids).count()
@@ -2379,76 +2529,16 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        is_admin = False
-        if user and user.is_authenticated:
-            if user.is_superuser:
-                is_admin = True
-            else:
-                try:
-                    member = user.member_profile
-                    if member.role in ('community_admin', 'super_admin'):
-                        is_admin = True
-                except Exception:
-                    pass
-
         queryset = MatrimonyProfile.objects.filter(deleted_at__isnull=True)
 
-        if not is_admin:
-            # Check if current user has an approved profile
-            viewer_profile = None
-            if user and user.is_authenticated:
-                viewer_profile = MatrimonyProfile.objects.filter(user=user, deleted_at__isnull=True).first()
-            
-            has_approved_profile = viewer_profile and viewer_profile.status in ('Approved', 'Active', 'Featured')
-
-            if not has_approved_profile:
-                # If they are not approved, they can ONLY see their own profile
-                if user and user.is_authenticated:
-                    return queryset.filter(user=user).order_by('-id')
-                return queryset.none()
-
-            if self._open_testing_enabled():
-                if user and user.is_authenticated:
-                    logger = logging.getLogger(__name__)
-                    queryset = self._open_test_profiles()
-                    logger.warning(
-                        "OPEN_TEST matrimony profile list: current_user_id=%s returned_profiles=%s",
-                        user.id,
-                        queryset.count(),
-                    )
-                    return queryset.order_by('-id')
-                return self._open_test_profiles().order_by('-id')
-
-            # For non-admins, filter approved / active profiles OR profiles owned by current logged-in user
-            if user and user.is_authenticated:
-                queryset = queryset.filter(Q(status__in=['Approved', 'Active', 'Featured']) | Q(user=user))
-            else:
-                queryset = queryset.filter(status__in=['Approved', 'Active', 'Featured'])
-
-            
-            # Apply visibility scope and audience filters
-            if not user or not user.is_authenticated:
-                # Unauthenticated users may only see platform-wide profiles
-                queryset = queryset.filter(visibility_type__in=['PLATFORM_WIDE'])
-            else:
-                try:
-                    viewer_member = user.member_profile
-                    viewer_community = viewer_member.community
-                except Exception:
-                    viewer_community = None
-
-                # For authenticated users, do a two-stage filter: coarse DB-level filter then precise per-object check
-                possible_q = queryset.filter(Q(visibility_type__in=['PLATFORM_WIDE', 'COMMUNITY_NETWORK', 'CUSTOM_AUDIENCE']) | Q(user=user))
-                # Materialize a limited candidate set to run precise permission checks
-                candidates = list(possible_q[:2000])
-                visible_ids = []
-                for p in candidates:
-                    try:
-                        if p.is_visible_to_user(user):
-                            visible_ids.append(p.id)
-                    except Exception:
-                        continue
-                queryset = queryset.filter(id__in=visible_ids)
+        if user and user.is_authenticated:
+            my_profile = MatrimonyProfile.objects.filter(user=user, deleted_at__isnull=True).first()
+            user._cached_matrimony_profile = my_profile
+            if my_profile:
+                interests = InterestRequest.objects.filter(
+                    Q(sender=my_profile) | Q(receiver=my_profile)
+                ).values_list('sender_id', 'receiver_id', 'status')
+                user._cached_interests = set(interests)
 
         # Apply Global Search & Filters
         community_id = self.request.query_params.get('community_id') or self.request.query_params.get('communityId')
@@ -2530,11 +2620,11 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             return None
         normalized = str(value).strip()
         lowered = normalized.lower()
-        if lowered in ('female only', 'bride profiles', 'bride'):
-            return 'Bride'
-        if lowered in ('male only', 'groom profiles', 'groom'):
-            return 'Groom'
-        if normalized in ('Bride', 'Groom'):
+        if lowered in ('female', 'female only', 'bride profiles', 'bride'):
+            return 'Female'
+        if lowered in ('male', 'male only', 'groom profiles', 'groom'):
+            return 'Male'
+        if normalized in ('Female', 'Male'):
             return normalized
         return None
 
@@ -2543,10 +2633,16 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
 
     def _load_partner_preference(self, profile, user):
         if profile:
-            try:
-                return PartnerPreference.objects.get(profile=profile)
-            except PartnerPreference.DoesNotExist:
-                pass
+            if hasattr(profile, 'partner_preference'):
+                try:
+                    return profile.partner_preference
+                except PartnerPreference.DoesNotExist:
+                    pass
+            else:
+                try:
+                    return PartnerPreference.objects.get(profile=profile)
+                except PartnerPreference.DoesNotExist:
+                    pass
         if user:
             try:
                 return PartnerPreference.objects.get(user=user)
@@ -2571,86 +2667,109 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                 return False, 'private_without_accepted_interest'
             return True, 'private_accepted_interest'
 
-        if visibility_type == 'PLATFORM_WIDE':
-            return True, 'platform_wide'
+        # For non-private visibility types: PLATFORM_WIDE, COMMUNITY_NETWORK, CUSTOM_AUDIENCE
+        if visibility_type in ('PLATFORM_WIDE', 'COMMUNITY_NETWORK', 'CUSTOM_AUDIENCE'):
+            # Resolve viewer community (required for COMMUNITY_NETWORK and CUSTOM_AUDIENCE)
+            viewer_community = getattr(viewer_profile, 'community', None)
+            if not viewer_community and viewer_profile:
+                comm_id = getattr(viewer_profile, 'community_id', None)
+                if comm_id:
+                    try:
+                        from api.models import Community
+                        viewer_community = Community.objects.get(id=comm_id)
+                    except Exception:
+                        pass
 
-        viewer_community = getattr(viewer_profile, 'community', None)
-        if not viewer_community:
-            return False, 'missing_viewer_community'
+            # 1. COMMUNITY_NETWORK scope checks — community membership required
+            if visibility_type == 'COMMUNITY_NETWORK':
+                if not viewer_community:
+                    return False, 'missing_viewer_community'
+                hierarchy_scope = getattr(profile, 'hierarchy_scope', 'My Community')
+                profile_community = getattr(profile, 'community', None)
+                if not profile_community:
+                    return False, 'missing_candidate_community'
 
-        if visibility_type == 'COMMUNITY_NETWORK':
-            hierarchy_scope = getattr(profile, 'hierarchy_scope', 'My Community')
-            profile_community = getattr(profile, 'community', None)
-            if not profile_community:
-                return False, 'missing_candidate_community'
-
-            allowed_ids = {profile_community.id}
-            if hierarchy_scope == 'Parent Community':
-                if profile_community.parent_id:
-                    allowed_ids.add(profile_community.parent_id)
-            elif hierarchy_scope == 'Child Communities':
-                allowed_ids.update(c.id for c in get_descendants_for_community(profile_community))
-            elif hierarchy_scope in ('Entire Hierarchy Chain', 'Entire Network'):
-                allowed_ids.update(c.id for c in get_ancestors_for_community(profile_community))
-                allowed_ids.update(c.id for c in get_descendants_for_community(profile_community))
-            elif hierarchy_scope == 'Selected Communities':
-                allowed_ids = set(profile.selected_communities.values_list('id', flat=True))
-            elif hierarchy_scope not in ('My Community', 'My Community Only'):
                 allowed_ids = {profile_community.id}
+                if hierarchy_scope == 'Parent Community':
+                    if profile_community.parent_id:
+                        allowed_ids.add(profile_community.parent_id)
+                elif hierarchy_scope == 'Child Communities':
+                    allowed_ids.update(c.id for c in get_descendants_for_community(profile_community))
+                elif hierarchy_scope in ('Entire Hierarchy Chain', 'Entire Network'):
+                    allowed_ids.update(c.id for c in get_ancestors_for_community(profile_community))
+                    allowed_ids.update(c.id for c in get_descendants_for_community(profile_community))
+                elif hierarchy_scope == 'Selected Communities':
+                    allowed_ids = set(profile.selected_communities.values_list('id', flat=True))
+                elif hierarchy_scope not in ('My Community', 'My Community Only'):
+                    allowed_ids = {profile_community.id}
 
-            if viewer_community.id not in allowed_ids:
-                return False, f'community_network_scope_mismatch:{hierarchy_scope}'
-            return True, f'community_network:{hierarchy_scope}'
+                if viewer_community.id not in allowed_ids:
+                    return False, f'community_network_scope_mismatch:{hierarchy_scope}'
 
-        if visibility_type == 'CUSTOM_AUDIENCE':
-            if profile.target_communities.exists() and not profile.target_communities.filter(id=viewer_community.id).exists():
-                return False, 'custom_audience_community_mismatch'
-            if profile.selected_communities.exists() and not profile.selected_communities.filter(id=viewer_community.id).exists():
-                return False, 'custom_audience_selected_community_mismatch'
+            # 2. CUSTOM_AUDIENCE selected_communities scope
+            if visibility_type == 'CUSTOM_AUDIENCE':
+                if not viewer_community:
+                    return False, 'missing_viewer_community'
+                if profile.selected_communities.exists() and not profile.selected_communities.filter(id=viewer_community.id).exists():
+                    return False, 'custom_audience_selected_community_mismatch'
+
+            # 3. General target audience filters (apply to PLATFORM_WIDE, COMMUNITY_NETWORK, CUSTOM_AUDIENCE)
+            # Only apply target_communities filter when viewer community is known
+            if viewer_community and profile.target_communities.exists() and not profile.target_communities.filter(id=viewer_community.id).exists():
+                return False, 'target_communities_mismatch'
 
             if profile.target_castes:
                 allowed_castes = self._normalize_preference_list(profile.target_castes)
                 if allowed_castes and not self._value_matches_exact_list(getattr(viewer_profile, 'caste', ''), allowed_castes):
-                    return False, 'custom_audience_caste_mismatch'
+                    return False, 'target_caste_mismatch'
+
             if profile.target_subcastes:
                 allowed_subcastes = self._normalize_preference_list(profile.target_subcastes)
                 if allowed_subcastes and not self._value_matches_exact_list(getattr(viewer_profile, 'sub_caste', ''), allowed_subcastes):
-                    return False, 'custom_audience_sub_caste_mismatch'
+                    return False, 'target_sub_caste_mismatch'
+
             if profile.target_states:
                 allowed_states = self._normalize_preference_list(profile.target_states)
                 if allowed_states and not self._value_matches_exact_list(getattr(viewer_profile, 'state', ''), allowed_states):
-                    return False, 'custom_audience_state_mismatch'
+                    return False, 'target_state_mismatch'
+
             if profile.target_cities:
                 allowed_cities = self._normalize_preference_list(profile.target_cities)
                 if allowed_cities and not self._value_matches_exact_list(getattr(viewer_profile, 'city', ''), allowed_cities):
-                    return False, 'custom_audience_city_mismatch'
+                    return False, 'target_city_mismatch'
 
             target_gender = (profile.target_gender or '').strip()
             if target_gender and target_gender not in ('Everyone', 'All'):
                 viewer_gender = getattr(viewer_profile, 'gender', '')
                 if target_gender in ('Male Only', 'Groom Profiles', 'Groom') and viewer_gender != 'Groom':
-                    return False, 'custom_audience_gender_mismatch'
+                    return False, 'target_gender_mismatch'
                 if target_gender in ('Female Only', 'Bride Profiles', 'Bride') and viewer_gender != 'Bride':
-                    return False, 'custom_audience_gender_mismatch'
+                    return False, 'target_gender_mismatch'
 
+            # Age range check — only block if viewer_age is known AND out of range
             viewer_age = getattr(viewer_profile, 'age', None)
-            if viewer_age is None or not (profile.target_age_min <= viewer_age <= profile.target_age_max):
-                return False, 'custom_audience_age_mismatch'
+            if viewer_age is not None:
+                age_min = profile.target_age_min if profile.target_age_min is not None else 0
+                age_max = profile.target_age_max if profile.target_age_max is not None else 150
+                if not (age_min <= viewer_age <= age_max):
+                    return False, 'target_age_mismatch'
 
             if profile.target_marital_statuses:
                 allowed_statuses = self._normalize_preference_list(profile.target_marital_statuses)
                 if allowed_statuses and not self._value_matches_exact_list(getattr(viewer_profile, 'marital_status', ''), allowed_statuses):
-                    return False, 'custom_audience_marital_status_mismatch'
+                    return False, 'target_marital_status_mismatch'
+
             if profile.target_educations:
                 allowed_educations = self._normalize_preference_list(profile.target_educations)
                 if allowed_educations and not self._value_matches_contains_list(getattr(viewer_profile, 'education', ''), allowed_educations):
-                    return False, 'custom_audience_education_mismatch'
+                    return False, 'target_education_mismatch'
+
             if profile.target_occupations:
                 allowed_occupations = self._normalize_preference_list(profile.target_occupations)
                 if allowed_occupations and not self._value_matches_contains_list(getattr(viewer_profile, 'profession', ''), allowed_occupations):
-                    return False, 'custom_audience_occupation_mismatch'
+                    return False, 'target_occupation_mismatch'
 
-            return True, 'custom_audience'
+            return True, 'visible_under_policy'
 
         return False, f'unsupported_visibility_type:{visibility_type}'
 
@@ -2670,41 +2789,92 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         if gender and profile.gender != gender:
             return False, [f"gender_mismatch:{profile.gender} vs {gender}"]
 
-        if pref.min_age is not None and profile.age < pref.min_age:
-            return False, [f"age_below_min:{profile.age} < {pref.min_age}"]
-        if pref.max_age is not None and profile.age > pref.max_age:
-            return False, [f"age_above_max:{profile.age} > {pref.max_age}"]
+        # Age checks — only fail if profile age is known
+        profile_age = getattr(profile, 'age', None)
+        if profile_age is not None:
+            if pref.min_age is not None and profile_age < pref.min_age:
+                return False, [f"age_below_min:{profile_age} < {pref.min_age}"]
+            if pref.max_age is not None and profile_age > pref.max_age:
+                return False, [f"age_above_max:{profile_age} > {pref.max_age}"]
 
         if pref.caste:
             allowed_castes = self._normalize_preference_list(pref.caste)
-            if allowed_castes and not self._value_matches_exact_list(profile.caste, allowed_castes):
+            if allowed_castes and 'any' not in allowed_castes and not self._value_matches_exact_list(profile.caste, allowed_castes):
                 return False, [f"caste_mismatch:{profile.caste}"]
 
         if pref.sub_caste:
             allowed_subcastes = self._normalize_preference_list(pref.sub_caste)
-            if allowed_subcastes and not self._value_matches_exact_list(profile.sub_caste, allowed_subcastes):
+            if allowed_subcastes and 'any' not in allowed_subcastes and not self._value_matches_exact_list(profile.sub_caste, allowed_subcastes):
                 return False, [f"sub_caste_mismatch:{profile.sub_caste}"]
 
-        if pref.city and (not profile.city or profile.city.strip().lower() != pref.city.strip().lower()):
-            return False, [f"city_mismatch:{profile.city} vs {pref.city}"]
-        if pref.state and (not profile.state or profile.state.strip().lower() != pref.state.strip().lower()):
-            return False, [f"state_mismatch:{profile.state} vs {pref.state}"]
-        if pref.country and (not profile.country or profile.country.strip().lower() != pref.country.strip().lower()):
-            return False, [f"country_mismatch:{profile.country} vs {pref.country}"]
+        if pref.city:
+            allowed_cities = self._normalize_preference_list(pref.city)
+            if allowed_cities and 'any' not in allowed_cities and not self._value_matches_exact_list(profile.city, allowed_cities):
+                return False, [f"city_mismatch:{profile.city}"]
+        if pref.state:
+            allowed_states = self._normalize_preference_list(pref.state)
+            if allowed_states and 'any' not in allowed_states and not self._value_matches_exact_list(profile.state, allowed_states):
+                return False, [f"state_mismatch:{profile.state}"]
+        if pref.country:
+            allowed_countries = self._normalize_preference_list(pref.country)
+            if allowed_countries and 'any' not in allowed_countries and not self._value_matches_exact_list(profile.country, allowed_countries):
+                return False, [f"country_mismatch:{profile.country}"]
 
         if pref.education:
             allowed_educations = self._normalize_preference_list(pref.education)
-            if allowed_educations and not self._value_matches_contains_list(profile.education, allowed_educations):
+            if allowed_educations and 'any' not in allowed_educations and not self._value_matches_contains_list(profile.education, allowed_educations):
                 return False, [f"education_mismatch:{profile.education}"]
         if pref.occupation:
             allowed_occupations = self._normalize_preference_list(pref.occupation)
-            if allowed_occupations and not self._value_matches_contains_list(profile.profession, allowed_occupations):
+            if allowed_occupations and 'any' not in allowed_occupations and not self._value_matches_contains_list(profile.profession, allowed_occupations):
                 return False, [f"occupation_mismatch:{profile.profession}"]
-        if pref.marital_status and (not profile.marital_status or profile.marital_status.strip().lower() != pref.marital_status.strip().lower()):
-            return False, [f"marital_status_mismatch:{profile.marital_status} vs {pref.marital_status}"]
+        if pref.marital_status:
+            allowed_statuses = self._normalize_preference_list(pref.marital_status)
+            if allowed_statuses and 'any' not in allowed_statuses and not self._value_matches_exact_list(profile.marital_status, allowed_statuses):
+                return False, [f"marital_status_mismatch:{profile.marital_status}"]
 
-        if pref.income_range and pref.income_range.strip().lower() not in (profile.income or '').strip().lower():
-            return False, [f"income_range_mismatch:{profile.income}"]
+        # Height check
+        if getattr(pref, 'min_height', None) or getattr(pref, 'max_height', None):
+            def parse_h(h_val):
+                if not h_val: return None
+                h_val = str(h_val).strip().lower()
+                try:
+                    return float(h_val)
+                except ValueError:
+                    pass
+                import re
+                m = re.search(r"(\d+)\s*(?:'|ft|feet)\s*(\d+)?\s*(?:\"|in|inches)?", h_val)
+                if m:
+                    ft = int(m.group(1))
+                    inch = int(m.group(2)) if m.group(2) else 0
+                    return ft * 12 + inch
+                m_num = re.findall(r"\d+\.?\d*", h_val)
+                if m_num:
+                    try:
+                        return float(m_num[0])
+                    except ValueError:
+                        pass
+                return None
+            
+            p_height = parse_h(profile.height)
+            if p_height is not None:
+                min_h_str = getattr(pref, 'min_height', '')
+                if min_h_str:
+                    min_h = parse_h(min_h_str)
+                    if min_h is not None and p_height < min_h:
+                        return False, [f"height_below_min:{profile.height} < {pref.min_height}"]
+                max_h_str = getattr(pref, 'max_height', '')
+                if max_h_str:
+                    max_h = parse_h(max_h_str)
+                    if max_h is not None and p_height > max_h:
+                        return False, [f"height_above_max:{profile.height} > {pref.max_height}"]
+
+        if pref.income_range:
+            allowed_incomes = self._normalize_preference_list(pref.income_range)
+            if allowed_incomes and 'any' not in allowed_incomes:
+                p_income = (profile.income or '').strip().lower()
+                if not any(inc in p_income for inc in allowed_incomes):
+                    return False, [f"income_range_mismatch:{profile.income}"]
 
         return True, ['matched_all']
 
@@ -2721,11 +2891,19 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             'candidate_pref': candidate_pref,
         }
 
-        if not my_accepts or not candidate_accepts:
-            return False, result
+        # Candidate must satisfy my preferences to show up.
+        # If matching mode is SMART_MATCHING, candidate must also prefer the requester.
+        from django.conf import settings
+        matching_mode = getattr(settings, 'MATCHING_MODE', 'SMART_MATCHING')
+        if matching_mode == 'SMART_MATCHING':
+            if not my_accepts or not candidate_accepts:
+                return False, result
+        else:
+            if not my_accepts:
+                return False, result
 
         score_self = self._calculate_preference_score(candidate, my_pref)
-        score_candidate = self._calculate_preference_score(my_profile, candidate_pref)
+        score_candidate = self._calculate_preference_score(my_profile, candidate_pref) if candidate_accepts else 50
         result['match_score'] = int((score_self + score_candidate) / 2)
         return True, result
 
@@ -2868,164 +3046,185 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         )
         return Response({"status": "success", "detail": "Profile soft deleted successfully."})
 
+    def _active_approved_profiles(self):
+        """
+        Returns base queryset of all active/approved matrimony profiles
+        that are eligible to appear in reach estimates.
+        Excludes Draft, Suspended, and Rejected profiles.
+        """
+        from django.db.models import Q
+        return MatrimonyProfile.objects.filter(
+            status__in=["Approved", "Active", "Featured"]
+        ).select_related('user', 'community')
+
     @action(detail=False, methods=['post'], url_path='estimate-reach')
     def estimate_reach(self, request):
-        data = request.data
-
-        if self._open_testing_enabled():
-            queryset = self._active_approved_profiles()
-            if request.user.is_authenticated:
-                queryset = queryset.exclude(user=request.user)
-            reach = queryset.count()
-            logger = logging.getLogger(__name__)
-            logger.debug(
-                "OPEN_TESTING matrimony estimate reach: user_id=%s eligible_users=%s",
-                getattr(request.user, 'id', None),
-                reach,
-            )
-            return Response({
-                "eligible_users": reach,
-                "eligible_communities": queryset.values_list('community_id', flat=True).distinct().count(),
-                "eligible_matches": reach,
-            })
-        
-        # Target gender
-        gender = data.get('filter_gender')
-        if not gender or gender == 'All' or gender == 'Everyone':
-            # default target is opposite gender
-            try:
-                my_prof = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
-                if my_prof:
-                    gender = 'Groom' if my_prof.gender == 'Bride' else 'Bride'
-            except Exception:
-                pass
-
-        # Start with all active and approved profiles of target gender (excluding current user)
-        from django.db.models import Q
-        queryset = MatrimonyProfile.objects.filter(status='Active', is_verified=True, deleted_at__isnull=True)
-        if request.user.is_authenticated:
-            queryset = queryset.exclude(user=request.user)
-            
-        if gender and gender in ('Bride', 'Groom', 'Bride Profiles', 'Groom Profiles'):
-            if 'Groom' in gender:
-                queryset = queryset.filter(gender='Groom')
-            else:
-                queryset = queryset.filter(gender='Bride')
-            
-        # 1. Communities filter
-        comm_ids = data.get('filter_communities', [])
-        if comm_ids:
-            queryset = queryset.filter(community_id__in=comm_ids)
-            
-        # 2. Caste filter
-        castes = data.get('filter_castes', '')
-        if castes:
-            allowed_castes = [c.strip().lower() for c in castes.split(',') if c.strip()]
-            if allowed_castes:
-                q_obj = Q()
-                for c in allowed_castes:
-                    q_obj |= Q(caste__iexact=c)
-                queryset = queryset.filter(q_obj)
-                
-        # 3. Sub-Caste filter
-        sub_castes = data.get('filter_sub_castes', '')
-        if sub_castes:
-            allowed_subcastes = [sc.strip().lower() for sc in sub_castes.split(',') if sc.strip()]
-            if allowed_subcastes:
-                q_obj = Q()
-                for sc in allowed_subcastes:
-                    q_obj |= Q(sub_caste__iexact=sc)
-                queryset = queryset.filter(q_obj)
-                
-        # 4. State filter
-        states = data.get('filter_states', '')
-        if states:
-            allowed_states = [s.strip().lower() for s in states.split(',') if s.strip()]
-            if allowed_states:
-                q_obj = Q()
-                for s in allowed_states:
-                    q_obj |= Q(state__icontains=s)
-                queryset = queryset.filter(q_obj)
-                
-        # 5. City filter
-        cities = data.get('filter_cities', '')
-        if cities:
-            allowed_cities = [c.strip().lower() for c in cities.split(',') if c.strip()]
-            if allowed_cities:
-                q_obj = Q()
-                for c in allowed_cities:
-                    q_obj |= Q(city__icontains=c)
-                queryset = queryset.filter(q_obj)
-                
-        # 6. Age filter
-        min_age = int(data.get('filter_min_age', 18) or 18)
-        max_age = int(data.get('filter_max_age', 60) or 60)
-        queryset = queryset.filter(age__gte=min_age, age__lte=max_age)
-        
-        # 7. Marital status filter
-        marital_statuses = data.get('filter_marital_statuses', '')
-        if marital_statuses:
-            allowed_ms = [ms.strip().lower() for ms in marital_statuses.split(',') if ms.strip()]
-            if allowed_ms:
-                q_obj = Q()
-                for ms in allowed_ms:
-                    q_obj |= Q(marital_status__iexact=ms)
-                queryset = queryset.filter(q_obj)
-                
-        # 8. Education filter
-        educations = data.get('filter_educations', '')
-        if educations:
-            allowed_edu = [e.strip().lower() for e in educations.split(',') if e.strip()]
-            if allowed_edu:
-                q_obj = Q()
-                for e in allowed_edu:
-                    q_obj |= Q(education__icontains=e)
-                queryset = queryset.filter(q_obj)
-                
-        # 9. Occupation filter
-        occupations = data.get('filter_occupations', '')
-        if occupations:
-            allowed_occ = [o.strip().lower() for o in occupations.split(',') if o.strip()]
-            if allowed_occ:
-                q_obj = Q()
-                for o in allowed_occ:
-                    q_obj |= Q(profession__icontains=o)
-                queryset = queryset.filter(q_obj)
-                
-        reach = queryset.count()
-
-        # Eligible communities covered by this filter
-        eligible_communities = queryset.values_list('community_id', flat=True).distinct().count()
-
-        # Eligible matches: if requester has a matrimony profile, compute how many of these
-        # would be considered matches according to basic partner preference (lightweight)
-        eligible_matches = 0
+        """
+        Estimates how many active profiles would see a matrimony profile
+        based on the given visibility scope and targeting filters.
+        Returns: { eligible_users, eligible_communities, eligible_matches }
+        """
         try:
-            if request.user.is_authenticated:
-                my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
+            data = request.data
+
+            # Base queryset — only active approved profiles
+            queryset = MatrimonyProfile.objects.filter(
+                status__in=["Approved", "Active", "Featured"]
+            )
+            if request.user and request.user.is_authenticated:
+                queryset = queryset.exclude(user=request.user)  # Exclude self
+
+            visibility_scope = data.get('visibility_scope', 'Platform Wide')
+            visibility_hierarchy = data.get('visibility_hierarchy', 'My Community')
+            selected_communities = data.get('selected_communities', [])
+            filter_communities = data.get('filter_communities', [])
+
+            # ── Scope-based filtering ──────────────────────────────
+            if visibility_scope == "Private":
+                # Private profiles have 0 reach by design
+                return Response({
+                    'eligible_users': 0,
+                    'eligible_communities': 0,
+                    'eligible_matches': 0,
+                })
+
+            elif visibility_scope == "Community Network":
+                # Determine target community (fallback to request.user's community if not passed)
+                profile_community_id = data.get('profile_community_id')
+                user_community = None
+                if profile_community_id:
+                    try:
+                        user_community = Community.objects.get(id=int(profile_community_id))
+                    except (Community.DoesNotExist, ValueError, TypeError):
+                        pass
+
+                if not user_community:
+                    user_member = getattr(request.user, 'member_profile', None) if request.user and request.user.is_authenticated else None
+                    user_community = getattr(user_member, 'community', None) if user_member else None
+
+                if not user_community:
+                    # If no community can be determined, community network visibility has no reach
+                    queryset = queryset.none()
+                else:
+                    allowed_ids = {user_community.id}
+                    if visibility_hierarchy == "Selected Communities" and selected_communities:
+                        allowed_ids = set(int(cid) for cid in selected_communities if str(cid).isdigit())
+                    elif visibility_hierarchy == "My Community":
+                        pass  # allowed_ids = {user_community.id}
+                    elif visibility_hierarchy == "Parent Community":
+                        if user_community.parent_id:
+                            allowed_ids.add(user_community.parent_id)
+                    elif visibility_hierarchy == "Child Communities":
+                        allowed_ids.update(c.id for c in get_descendants_for_community(user_community))
+                    elif visibility_hierarchy in ("Entire Hierarchy Chain", "Entire Network"):
+                        allowed_ids.update(c.id for c in get_ancestors_for_community(user_community))
+                        allowed_ids.update(c.id for c in get_descendants_for_community(user_community))
+                    
+                    queryset = queryset.filter(community_id__in=allowed_ids)
+
+            elif visibility_scope in ["Custom Audience", "Platform Wide"]:
+                # Apply filter_communities if specified
+                if filter_communities:
+                    queryset = queryset.filter(community_id__in=filter_communities)
+
+            # ── Audience targeting filters ─────────────────────────
+            filter_gender = data.get('filter_gender', 'Everyone')
+            if filter_gender == 'Male Only':
+                queryset = queryset.filter(gender='Groom')
+            elif filter_gender == 'Female Only':
+                queryset = queryset.filter(gender='Bride')
+
+            filter_min_age = data.get('filter_min_age', 18)
+            filter_max_age = data.get('filter_max_age', 60)
+            if filter_min_age:
+                queryset = queryset.filter(age__gte=filter_min_age)
+            if filter_max_age:
+                queryset = queryset.filter(age__lte=filter_max_age)
+
+            filter_castes = data.get('filter_castes', '')
+            if filter_castes:
+                caste_list = [c.strip() for c in filter_castes.split(',') if c.strip()]
+                if caste_list:
+                    queryset = queryset.filter(caste__in=caste_list)
+
+            filter_states = data.get('filter_states', '')
+            if filter_states:
+                state_list = [s.strip() for s in filter_states.split(',') if s.strip()]
+                if state_list:
+                    queryset = queryset.filter(state__in=state_list)
+
+            filter_cities = data.get('filter_cities', '')
+            if filter_cities:
+                city_list = [c.strip() for c in filter_cities.split(',') if c.strip()]
+                if city_list:
+                    queryset = queryset.filter(city__in=city_list)
+
+            filter_marital_statuses = data.get('filter_marital_statuses', '')
+            if filter_marital_statuses:
+                status_list = [s.strip() for s in filter_marital_statuses.split(',') if s.strip()]
+                if status_list:
+                    queryset = queryset.filter(marital_status__in=status_list)
+
+            filter_educations = data.get('filter_educations', '')
+            if filter_educations:
+                edu_list = [e.strip().lower() for e in filter_educations.split(',') if e.strip()]
+                if edu_list:
+                    q_obj = Q()
+                    for edu in edu_list:
+                        q_obj |= Q(education__icontains=edu)
+                    queryset = queryset.filter(q_obj)
+
+            filter_occupations = data.get('filter_occupations', '')
+            if filter_occupations:
+                occ_list = [o.strip().lower() for o in filter_occupations.split(',') if o.strip()]
+                if occ_list:
+                    q_obj = Q()
+                    for occ in occ_list:
+                        q_obj |= Q(profession__icontains=occ)
+                    queryset = queryset.filter(q_obj)
+
+            # ── Count results ──────────────────────────────────────
+            eligible_users = queryset.count()
+
+            # Count distinct communities represented
+            eligible_communities = queryset.values('community_id').distinct().count()
+
+            # Rough match estimate: profiles that could be mutual matches
+            # (opposite gender as a basic signal)
+            profile_gender = data.get('profile_gender')
+            if not profile_gender:
+                user_member = getattr(request.user, 'member_profile', None) if request.user and request.user.is_authenticated else None
+                profile_gender = getattr(user_member, 'gender', None) if user_member else None
+                # Normalize 'Male'/'Female' to 'Groom'/'Bride'
+                if profile_gender == 'Male':
+                    profile_gender = 'Groom'
+                elif profile_gender == 'Female':
+                    profile_gender = 'Bride'
+
+            if profile_gender in ['Groom', 'Male']:
+                match_queryset = queryset.filter(gender='Bride')
+            elif profile_gender in ['Bride', 'Female']:
+                match_queryset = queryset.filter(gender='Groom')
             else:
-                my_profile = None
+                match_queryset = queryset
+            eligible_matches = match_queryset.count()
 
-            if my_profile and self._profile_is_active_and_approved(my_profile):
-                pref = self._load_partner_preference(my_profile, request.user)
-                candidates = queryset.exclude(id=my_profile.id)
-                candidates = self._filter_candidates_by_preference(candidates, pref)
+            return Response({
+                'eligible_users': eligible_users,
+                'eligible_communities': eligible_communities,
+                'eligible_matches': eligible_matches,
+            })
 
-                for p in candidates:
-                    visible, _ = self._profile_visibility_reason(p, request.user, my_profile)
-                    if not visible:
-                        continue
-                    matches, _ = self._mutual_preference_match(my_profile, p, pref)
-                    if matches:
-                        eligible_matches += 1
-        except Exception:
-            eligible_matches = 0
-
-        return Response({
-            "eligible_users": reach,
-            "eligible_communities": eligible_communities,
-            "eligible_matches": eligible_matches,
-        })
+        except Exception as e:
+            import traceback
+            print(f"[estimate_reach] Error: {e}")
+            traceback.print_exc()
+            return Response({
+                'eligible_users': 0,
+                'eligible_communities': 0,
+                'eligible_matches': 0,
+                'error': str(e)
+            }, status=200)  # Return 200 with 0s instead of 500 so frontend handles gracefully
 
     @action(detail=False, methods=['get'], url_path='my-profiles')
     def my_profiles(self, request):
@@ -3034,6 +3233,113 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         profiles = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True)
         serializer = self.get_serializer(profiles, many=True)
         return Response(serializer.data)
+    @action(detail=False, methods=['get', 'post'], url_path='audit-sync')
+    def audit_sync(self, request):
+        if not request.user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        member = getattr(request.user, 'member_profile', None)
+        profile = MatrimonyProfile.objects.filter(user=request.user, family_member__isnull=True, deleted_at__isnull=True).first()
+        
+        if not member:
+            return Response({"detail": "Member profile not found"}, status=status.HTTP_404_NOT_FOUND)
+        if not profile:
+            return Response({"detail": "Matrimony profile not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        fields_to_compare = [
+            ("Full Name", lambda m: m.name, lambda p: p.name, lambda mv, pv: mv == pv),
+            ("Gender", lambda m: 'Groom' if m.gender == 'Male' else 'Bride' if m.gender == 'Female' else 'Other', lambda p: p.gender, lambda mv, pv: mv == pv),
+            ("Date Of Birth", lambda m: str(m.birthdate) if m.birthdate else None, lambda p: str(p.dob) if p.dob else None, lambda mv, pv: mv == pv),
+            ("Age", lambda m: m.age, lambda p: p.age, lambda mv, pv: mv == pv),
+            ("Community", lambda m: m.community.name if m.community else None, lambda p: p.community.name if p.community else None, lambda mv, pv: mv == pv),
+            ("Caste", lambda m: m.community.caste if m.community else '', lambda p: p.caste or '', lambda mv, pv: mv == pv),
+            ("Sub Caste", lambda m: m.community.sub_caste if m.community else '', lambda p: p.sub_caste or '', lambda mv, pv: mv == pv),
+            ("State", lambda m: m.state, lambda p: p.state, lambda mv, pv: mv == pv),
+            ("City", lambda m: m.village, lambda p: p.city, lambda mv, pv: mv == pv),
+            ("Mobile Number", lambda m: m.phone, lambda p: p.contact_phone, lambda mv, pv: mv == pv),
+            ("Email", lambda m: m.email, lambda p: p.contact_email, lambda mv, pv: mv == pv)
+        ]
+        
+        comparison_results = []
+        conflicts_count = 0
+        
+        for label, m_func, p_func, comp_func in fields_to_compare:
+            try:
+                mv = m_func(member)
+            except Exception:
+                mv = None
+            try:
+                pv = p_func(profile)
+            except Exception:
+                pv = None
+                
+            in_sync = comp_func(mv, pv)
+            if not in_sync:
+                conflicts_count += 1
+                
+            comparison_results.append({
+                "field": label,
+                "member_value": mv,
+                "matrimony_value": pv,
+                "in_sync": in_sync
+            })
+            
+        if request.method == 'POST':
+            profile.name = member.name
+            if member.gender == 'Male':
+                profile.gender = 'Groom'
+            elif member.gender == 'Female':
+                profile.gender = 'Bride'
+            profile.dob = member.birthdate
+            profile.age = member.age
+            profile.community = member.community
+            profile.state = member.state
+            profile.city = member.village
+            profile.contact_phone = member.phone
+            profile.contact_email = member.email
+            profile.contact_name = member.name
+            
+            if member.community:
+                profile.caste = member.community.caste or ''
+                profile.sub_caste = member.community.sub_caste or ''
+                
+            if member.avatar:
+                profile.photo = member.avatar
+            if member.avatar_url:
+                profile.photo_url = member.avatar_url
+                
+            profile.save()
+            profile.recalculate_status(save=True)
+            
+            comparison_results = []
+            for label, m_func, p_func, comp_func in fields_to_compare:
+                try:
+                    mv = m_func(member)
+                except Exception:
+                    mv = None
+                try:
+                    pv = p_func(profile)
+                except Exception:
+                    pv = None
+                in_sync = comp_func(mv, pv)
+                comparison_results.append({
+                    "field": label,
+                    "member_value": mv,
+                    "matrimony_value": pv,
+                    "in_sync": in_sync
+                })
+            conflicts_count = 0
+            
+            return Response({
+                "detail": "Synchronization completed successfully.",
+                "conflicts_count": conflicts_count,
+                "fields": comparison_results
+            })
+            
+        return Response({
+            "conflicts_count": conflicts_count,
+            "fields": comparison_results
+        })
 
     @action(detail=False, methods=['get', 'post', 'patch'], url_path='my-profile')
     def my_profile(self, request):
@@ -3122,6 +3428,10 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                 'PLATFORM_WIDE': 'PLATFORM_WIDE',
                 'Custom Audience': 'CUSTOM_AUDIENCE',
                 'CUSTOM_AUDIENCE': 'CUSTOM_AUDIENCE',
+                'COMMUNITY ONLY': 'COMMUNITY_NETWORK',
+                'TARGETED MATCHES': 'CUSTOM_AUDIENCE',
+                'OPEN TO ALL': 'PLATFORM_WIDE',
+                'COMMUNITY_NETWORK': 'COMMUNITY_NETWORK',
             }
             return mapping.get(value, 'COMMUNITY_NETWORK')
 
@@ -3216,8 +3526,8 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                     pass
 
             photo_file = request.FILES.get('photo') or request.FILES.get('image')
-            visibility_type = normalize_visibility_type(data.get('visibility_type') or data.get('visibility_scope'))
-            hierarchy_scope = data.get('hierarchy_scope') or data.get('visibility_hierarchy') or 'My Community'
+            visibility_type = normalize_visibility_type(data.get('visibility_scope') or data.get('visibility_type'))
+            hierarchy_scope = data.get('visibility_hierarchy') or data.get('hierarchy_scope') or 'My Community'
             target_communities = get_int_list(data, 'target_communities') or get_int_list(data, 'filter_communities')
             selected_comms = get_int_list(data, 'selected_communities')
             target_castes = parse_string_list(data, 'target_castes', 'filter_castes')
@@ -3338,33 +3648,33 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             if not profile:
                 return Response({"detail": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            if 'visibility_scope' in payload and 'visibility_type' not in payload:
+            if 'visibility_scope' in payload:
                 payload['visibility_type'] = normalize_visibility_type(payload.get('visibility_scope'))
-            if 'visibility_hierarchy' in payload and 'hierarchy_scope' not in payload:
+            if 'visibility_hierarchy' in payload:
                 payload['hierarchy_scope'] = payload.get('visibility_hierarchy')
 
             # Accept legacy filter field names and map them to the current target_* model fields
-            if 'filter_communities' in payload and 'target_communities' not in payload:
+            if 'filter_communities' in payload:
                 payload['target_communities'] = payload.get('filter_communities')
-            if 'filter_castes' in payload and 'target_castes' not in payload:
+            if 'filter_castes' in payload:
                 payload['target_castes'] = payload.get('filter_castes')
-            if 'filter_sub_castes' in payload and 'target_subcastes' not in payload:
+            if 'filter_sub_castes' in payload:
                 payload['target_subcastes'] = payload.get('filter_sub_castes')
-            if 'filter_states' in payload and 'target_states' not in payload:
+            if 'filter_states' in payload:
                 payload['target_states'] = payload.get('filter_states')
-            if 'filter_cities' in payload and 'target_cities' not in payload:
+            if 'filter_cities' in payload:
                 payload['target_cities'] = payload.get('filter_cities')
-            if 'filter_gender' in payload and 'target_gender' not in payload:
+            if 'filter_gender' in payload:
                 payload['target_gender'] = payload.get('filter_gender')
-            if 'filter_min_age' in payload and 'target_age_min' not in payload:
+            if 'filter_min_age' in payload:
                 payload['target_age_min'] = payload.get('filter_min_age')
-            if 'filter_max_age' in payload and 'target_age_max' not in payload:
+            if 'filter_max_age' in payload:
                 payload['target_age_max'] = payload.get('filter_max_age')
-            if 'filter_marital_statuses' in payload and 'target_marital_statuses' not in payload:
+            if 'filter_marital_statuses' in payload:
                 payload['target_marital_statuses'] = payload.get('filter_marital_statuses')
-            if 'filter_educations' in payload and 'target_educations' not in payload:
+            if 'filter_educations' in payload:
                 payload['target_educations'] = payload.get('filter_educations')
-            if 'filter_occupations' in payload and 'target_occupations' not in payload:
+            if 'filter_occupations' in payload:
                 payload['target_occupations'] = payload.get('filter_occupations')
 
             serializer = self.get_serializer(profile, data=payload, partial=True)
@@ -3403,6 +3713,10 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                 if self._open_testing_enabled():
                     MatrimonyProfile.objects.filter(pk=profile.pk).update(status='Active', is_verified=True)
                 else:
+                    # If member edits a Rejected profile, clear verification so it re-enters the approval queue
+                    if profile.status == 'Rejected':
+                        MatrimonyProfile.objects.filter(pk=profile.pk).update(is_verified=False)
+                        profile.is_verified = False
                     profile.recalculate_status(save=True)
                 profile.refresh_from_db()
                 fresh_serializer = self.get_serializer(profile)
@@ -3435,7 +3749,6 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        # Preference belongs to profile
         profile_id = request.query_params.get('profile_id')
         if profile_id:
             profile = MatrimonyProfile.objects.filter(user=request.user, id=profile_id, deleted_at__isnull=True).first()
@@ -3449,6 +3762,14 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                 return Response(PartnerPreferenceSerializer(pref).data)
             elif request.method in ('POST', 'PATCH'):
                 pref, created = PartnerPreference.objects.get_or_create(user=request.user)
+                # If preference_data is sent in payload
+                pref_data = request.data.get('preferences_data')
+                if pref_data is not None:
+                    from api.preference_engine import PreferenceEngine
+                    try:
+                        PreferenceEngine.validate_preferences(pref_data)
+                    except ValidationError as e:
+                        return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
                 serializer = PartnerPreferenceSerializer(pref, data=request.data, partial=True)
                 if serializer.is_valid():
                     serializer.save()
@@ -3456,18 +3777,72 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
         if request.method == 'GET':
-            pref, created = PartnerPreference.objects.get_or_create(profile=profile)
+            from api.preference_engine import PreferenceEngine
+            # Make sure preference_data is initialized
+            pref_data = PreferenceEngine.load_preferences(profile.id)
+            pref = PartnerPreference.objects.get(profile=profile)
             serializer = PartnerPreferenceSerializer(pref)
             return Response(serializer.data)
             
         elif request.method in ('POST', 'PATCH'):
-            pref, created = PartnerPreference.objects.get_or_create(profile=profile)
+            pref_data = request.data.get('preferences_data')
+            if pref_data is not None:
+                from api.preference_engine import PreferenceEngine
+                try:
+                    PreferenceEngine.save_preferences(profile.id, pref_data)
+                except ValidationError as e:
+                    return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+            pref = PartnerPreference.objects.get(profile=profile)
             serializer = PartnerPreferenceSerializer(pref, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
                 profile.recalculate_status()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['post'], url_path='preferences/validate')
+    def validate_preferences(self, request):
+        from api.preference_engine import PreferenceEngine
+        from rest_framework.exceptions import ValidationError
+        try:
+            PreferenceEngine.validate_preferences(request.data)
+            return Response({"valid": True})
+        except ValidationError as e:
+            return Response({"valid": False, "errors": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get', 'post'], url_path='compatibility')
+    def compatibility(self, request, pk=None):
+        if not request.user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        candidate = self.get_object()
+        viewer_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
+        if not viewer_profile:
+            return Response({"detail": "You must have a matrimony profile to check compatibility"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from api.preference_engine import PreferenceEngine
+        comp = PreferenceEngine.explain_compatibility(viewer_profile, candidate)
+        return Response(comp)
+
+    @action(detail=False, methods=['post'], url_path='compare-profiles')
+    def compare_profiles(self, request):
+        if not request.user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        profile_a_id = request.data.get('profile_a')
+        profile_b_id = request.data.get('profile_b')
+        if not profile_a_id or not profile_b_id:
+            return Response({"detail": "profile_a and profile_b are required fields"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            profile_a = MatrimonyProfile.objects.get(id=profile_a_id, deleted_at__isnull=True)
+            profile_b = MatrimonyProfile.objects.get(id=profile_b_id, deleted_at__isnull=True)
+        except MatrimonyProfile.DoesNotExist:
+            return Response({"detail": "One or both profiles do not exist"}, status=status.HTTP_404_NOT_FOUND)
+            
+        from api.preference_engine import PreferenceEngine
+        res = PreferenceEngine.compare_profiles(profile_a, profile_b)
+        return Response(res)
 
     @action(detail=False, methods=['get', 'post', 'patch'], url_path='visibility')
     def visibility(self, request):
@@ -3759,22 +4134,25 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         sender_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
         if not sender_profile:
             return Response({"detail": "You must create a matrimony profile first"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        if sender_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+
+        try:
+            member = request.user.member_profile
+            has_access, err_msg = check_member_feature_limit(member, "MATRIMONY_INTERESTS", increment=True)
+            if not has_access:
+                return Response({"detail": err_msg, "upgrade_required": True}, status=status.HTTP_403_FORBIDDEN)
+        except Exception:
+            pass
 
         target_profile = self.get_object()
-        if target_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "The target Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         if target_profile == sender_profile:
             return Response({"detail": "You cannot show interest in your own profile"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check eligibility using MatrimonyRuleEngine
+        from api.rule_engine import MatrimonyRuleEngine
+        eligible, reason = MatrimonyRuleEngine.canSendInterest(sender_profile, target_profile)
+        if not eligible:
+            return Response({"detail": reason}, status=status.HTTP_400_BAD_REQUEST)
             
         interest, created = InterestRequest.objects.get_or_create(
             sender=sender_profile,
@@ -3818,18 +4196,6 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             interest = InterestRequest.objects.get(id=pk, receiver__user=request.user)
         except InterestRequest.DoesNotExist:
             return Response({"detail": "Interest request not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        if interest.receiver.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-            
-        if interest.sender.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "The sender's profile is no longer approved."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         interest.status = 'Accepted'
         interest.save()
@@ -3866,12 +4232,6 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             interest = InterestRequest.objects.get(id=pk, receiver__user=request.user)
         except InterestRequest.DoesNotExist:
             return Response({"detail": "Interest request not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        if interest.receiver.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         interest.status = 'Rejected'
         interest.save()
@@ -3901,12 +4261,6 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             interest = InterestRequest.objects.get(id=pk, sender__user=request.user)
         except InterestRequest.DoesNotExist:
             return Response({"detail": "Interest request not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        if interest.sender.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         interest.delete()
         return Response({"status": "success", "detail": "Interest request withdrawn successfully."})
@@ -3917,18 +4271,10 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
             
         my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
-        if not my_profile or my_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        if not my_profile:
+            return Response({"detail": "You must create a matrimony profile first"}, status=status.HTTP_400_BAD_REQUEST)
 
         profile = self.get_object()
-        if profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "The target Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         wish_item = Wishlist.objects.filter(user=request.user, profile=profile)
         if wish_item.exists():
@@ -3943,15 +4289,8 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
-        if not my_profile or my_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
         wishlist_items = Wishlist.objects.filter(user=request.user)
-        profiles = [item.profile for item in wishlist_items if item.profile.deleted_at is None and item.profile.status in ('Approved', 'Active', 'Featured')]
+        profiles = [item.profile for item in wishlist_items if item.profile.deleted_at is None]
         serializer = self.get_serializer(profiles, many=True)
         return Response(serializer.data)
 
@@ -3960,30 +4299,34 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
-        if not my_profile or my_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        interests = InterestRequest.objects.filter(receiver__user=request.user)
-        return Response(InterestRequestSerializer(interests, many=True).data)
+        interests = InterestRequest.objects.filter(
+            receiver__user=request.user
+        ).select_related(
+            'sender__user', 'sender__community',
+            'receiver__user', 'receiver__community',
+        ).prefetch_related(
+            'sender__photos', 'receiver__photos'
+        ).order_by('-created_at')
+        return Response(InterestRequestSerializer(
+            interests, many=True, context={'request': request}
+        ).data)
 
     @action(detail=False, methods=['get'], url_path='interests-sent')
     def interests_sent(self, request):
         if not request.user.is_authenticated:
             return Response({"detail": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
             
-        my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
-        if not my_profile or my_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        interests = InterestRequest.objects.filter(sender__user=request.user)
-        return Response(InterestRequestSerializer(interests, many=True).data)
+        interests = InterestRequest.objects.filter(
+            sender__user=request.user
+        ).select_related(
+            'sender__user', 'sender__community',
+            'receiver__user', 'receiver__community',
+        ).prefetch_related(
+            'sender__photos', 'receiver__photos'
+        ).order_by('-created_at')
+        return Response(InterestRequestSerializer(
+            interests, many=True, context={'request': request}
+        ).data)
 
     @action(detail=True, methods=['post'], url_path='record-view')
     def record_view(self, request, pk=None):
@@ -4044,129 +4387,202 @@ class MatrimonyProfileViewSet(viewsets.ModelViewSet):
         else:
             my_profile = MatrimonyProfile.objects.filter(user=request.user, deleted_at__isnull=True).first()
 
-        if not my_profile or my_profile.status not in ('Approved', 'Active', 'Featured'):
-            return Response(
-                {"detail": "Your Matrimony Profile is awaiting approval. Once approved by your Community Admin, you will be able to browse approved profiles, receive matches, and interact with other members."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        from api.preference_engine import PreferenceEngine
+        import re
 
+        # Parse query params
+        search_q = request.query_params.get('search', '').strip().lower()
+        location_q = request.query_params.get('location', '').strip().lower()
+        q_min_age = request.query_params.get('min_age')
+        q_max_age = request.query_params.get('max_age')
+        q_marital_status = request.query_params.get('marital_status')
+        q_caste = request.query_params.get('caste')
+        q_verified_only = request.query_params.get('verified_only') == 'true'
 
-        if self._open_testing_enabled():
-            profiles = self._open_test_profiles().exclude(user=request.user).select_related(
-                'user',
-                'community',
-            ).prefetch_related('photos').order_by('-id')
-            queried_ids = list(profiles.values_list('id', flat=True))
-            logger.warning(
-                "OPEN_TEST matrimony recommendation query: current_user_id=%s current_profile_id=%s queried_profile_ids=%s",
-                request.user.id,
-                my_profile.id,
-                queried_ids,
-            )
+        q_min_height = request.query_params.get('min_height')
+        q_max_height = request.query_params.get('max_height')
+        q_income = request.query_params.get('income')
+        q_education = request.query_params.get('education')
+        q_occupation = request.query_params.get('occupation')
+        q_community_id = request.query_params.get('community_id')
 
-            returned_profiles = list(profiles)
-            for profile in returned_profiles:
-                profile.match_score = my_profile.calculate_match_score(profile)
+        # Helpers for Python-level checks
+        def parse_h_to_inches(h_val):
+            if not h_val:
+                return 0
+            h_val = str(h_val).lower().strip()
+            m = re.search(r"(\d+)\s*(?:'|ft|feet)\s*(\d+)?\s*(?:\"|in|inches)?", h_val)
+            if m:
+                ft = int(m.group(1))
+                inch = int(m.group(2)) if m.group(2) else 0
+                return ft * 12 + inch
+            m_num = re.findall(r"\d+\.?\d*", h_val)
+            if m_num:
+                try:
+                    return float(m_num[0])
+                except ValueError:
+                    pass
+            return 0
 
-            returned_ids = [profile.id for profile in returned_profiles]
-            self._log_open_testing_recommendation_debug(request.user, returned_ids)
+        def check_inc_range(candidate_income, range_val):
+            if not range_val or range_val == 'Any':
+                return True
+            if not candidate_income:
+                return False
+            inc = str(candidate_income).lower()
+            r_val = str(range_val).upper()
+            if r_val == "UNDER 1L":
+                return "under 1" in inc or "below 1" in inc or "less than 1" in inc
+            if r_val == "1-3L":
+                return "1-3" in inc or "2l" in inc or "3l" in inc
+            if r_val == "3-5L":
+                return "3-5" in inc or "4l" in inc or "5l" in inc
+            if r_val == "5-10L":
+                return "5-10" in inc or "6l" in inc or "7l" in inc or "8l" in inc or "9l" in inc or "10l" in inc
+            if r_val == "10L+":
+                return "10l+" in inc or "10+" in inc or "above 10" in inc or "12l" in inc or "15l" in inc or "20l" in inc
+            return True
 
-            for profile in returned_profiles:
-                logger.warning(
-                    "OPEN_TEST matrimony profile included: candidate_id=%s candidate_user_id=%s candidate_username=%s current_user_id=%s reason=open_test_eligible",
-                    profile.id,
-                    profile.user_id,
-                    getattr(profile.user, 'username', None),
-                    request.user.id,
-                )
-
-            serializer = self.get_serializer(returned_profiles, many=True)
-            return Response(serializer.data)
-
-        if not self._profile_is_active_and_approved(my_profile):
-            return Response(
-                {"detail": "Your Matrimony Profile is not approved yet. Please wait for Community Admin approval before interacting with other profiles."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        pref = self._load_partner_preference(my_profile, request.user)
         candidates = MatrimonyProfile.objects.filter(
-            status__in=['Approved', 'Active', 'Featured'],
-            is_verified=True,
             deleted_at__isnull=True,
-        ).exclude(id=my_profile.id).select_related('user', 'community').prefetch_related(
+        )
+        if my_profile:
+            candidates = candidates.exclude(id=my_profile.id)
+
+        candidates = candidates.select_related(
+            'user', 'community', 'partner_preference'
+        ).prefetch_related(
             'selected_communities',
             'target_communities',
-        ).order_by('-id')
+            'photos'
+        )
 
+        # Apply basic SQL filters
+        if search_q:
+            candidates = candidates.filter(
+                Q(name__icontains=search_q) |
+                Q(caste__icontains=search_q) |
+                Q(sub_caste__icontains=search_q) |
+                Q(education__icontains=search_q) |
+                Q(profession__icontains=search_q)
+            )
+
+        if location_q:
+            candidates = candidates.filter(
+                Q(city__icontains=location_q) |
+                Q(state__icontains=location_q) |
+                Q(country__icontains=location_q)
+            )
+
+        if q_min_age:
+            candidates = candidates.filter(age__gte=int(q_min_age))
+        if q_max_age:
+            candidates = candidates.filter(age__lte=int(q_max_age))
+
+        if q_marital_status and q_marital_status.lower() != 'any':
+            candidates = candidates.filter(marital_status__iexact=q_marital_status)
+
+        if q_caste and q_caste.lower() != 'any':
+            candidates = candidates.filter(caste__icontains=q_caste)
+
+        if q_verified_only:
+            candidates = candidates.filter(is_verified=True)
+
+        if q_education:
+            edu_list = [e.strip().lower() for e in q_education.split(',') if e.strip()]
+            if edu_list:
+                q_edu = Q()
+                for edu in edu_list:
+                    q_edu |= Q(education__icontains=edu)
+                candidates = candidates.filter(q_edu)
+
+        if q_occupation:
+            occ_list = [o.strip().lower() for o in q_occupation.split(',') if o.strip()]
+            if occ_list:
+                q_occ = Q()
+                for occ in occ_list:
+                    q_occ |= Q(profession__icontains=occ)
+                candidates = candidates.filter(q_occ)
+
+        if q_community_id and q_community_id.lower() != 'any':
+            candidates = candidates.filter(community_id=int(q_community_id))
+
+        # Cache viewer profile and query interests
+        if my_profile:
+            request.user._cached_matrimony_profile = my_profile
+            interests = InterestRequest.objects.filter(
+                Q(sender=my_profile) | Q(receiver=my_profile)
+            ).values_list('sender_id', 'receiver_id', 'status')
+            request.user._cached_interests = set(interests)
+
+        from api.rule_engine import MatrimonyRuleEngine
+        from api.privacy_visibility_engine import PrivacyVisibilityEngine
+        from api.preference_engine import PreferenceEngine
+        
+        show_outside = request.query_params.get('show_outside_preferences') == 'true'
+        logger.info(f"[Matches API] Fetching matches for user profile: {my_profile.id if my_profile else 'None'} | show_outside_preferences: {show_outside}")
+        
         scored_profiles = []
         for p in candidates:
-            if not self._profile_is_active_and_approved(p):
-                logger.debug(
-                    "Recommended match excluded: candidate_id=%s user_id=%s reason=candidate_not_active_approved status=%s is_verified=%s",
-                    p.id,
-                    request.user.id,
-                    p.status,
-                    p.is_verified,
-                )
+            if not PrivacyVisibilityEngine.canDiscoverProfile(p, request.user):
+                logger.debug(f"[Matches API] Excluded Candidate {p.id} ({p.name}) - Privacy/Discovery failed")
                 continue
-
-            if not pref or not self._normalize_gender_preference(pref.gender):
-                expected_gender = 'Groom' if my_profile.gender == 'Bride' else 'Bride'
-                if p.gender != expected_gender:
-                    logger.debug(
-                        "Recommended match excluded: candidate_id=%s user_id=%s reason=fallback_gender_mismatch candidate_gender=%s expected_gender=%s",
-                        p.id,
-                        request.user.id,
-                        p.gender,
-                        expected_gender,
+                
+            # If show_outside_preferences is false/absent, apply preference engine filters
+            if my_profile and not show_outside and not self._open_testing_enabled():
+                compat = PreferenceEngine.calculate_compatibility(my_profile, p)
+                if compat.get('compatibility', 0) == 0 or compat.get('failed_hard_rules'):
+                    logger.info(
+                        f"[Matches API] Excluded Candidate {p.id} ({p.name}) - Preference mismatched. "
+                        f"Compatibility: {compat.get('compatibility')}% | Failed hard rules: {compat.get('failed_hard_rules')}"
                     )
                     continue
+                else:
+                    logger.info(
+                        f"[Matches API] Included Candidate {p.id} ({p.name}) - Preference matched. "
+                        f"Compatibility: {compat.get('compatibility')}%"
+                    )
 
-            visible, visibility_reason = self._profile_visibility_reason(p, request.user, my_profile)
-            if not visible:
-                logger.debug(
-                    "Recommended match excluded: candidate_id=%s user_id=%s reason=%s",
-                    p.id,
-                    request.user.id,
-                    visibility_reason,
-                )
+            # 4. Height Filter
+            if q_min_height or q_max_height:
+                inches = parse_h_to_inches(p.height)
+                if inches > 0:
+                    if q_min_height and inches < int(q_min_height):
+                        logger.debug(f"[Matches API] Excluded Candidate {p.id} ({p.name}) - height too low")
+                        continue
+                    if q_max_height and inches > int(q_max_height):
+                        logger.debug(f"[Matches API] Excluded Candidate {p.id} ({p.name}) - height too high")
+                        continue
+
+            # 5. Income Filter
+            if q_income and not check_inc_range(p.income, q_income):
+                logger.debug(f"[Matches API] Excluded Candidate {p.id} ({p.name}) - income out of range")
                 continue
 
-            matches, match_details = self._mutual_preference_match(my_profile, p, pref)
-
-            if not matches:
-                logger.debug(
-                    "Recommended match excluded: candidate_id=%s user_id=%s my_pref_pass=%s my_reasons=%s candidate_pref_pass=%s candidate_reasons=%s",
-                    p.id,
-                    request.user.id,
-                    match_details['my_pref_pass'],
-                    match_details['my_reasons'],
-                    match_details['candidate_pref_pass'],
-                    match_details['candidate_reasons'],
-                )
-                continue
-
-            p.match_score = match_details['match_score']
-
-            logger.debug(
-                "Recommended match included: candidate_id=%s user_id=%s match_score=%s my_reasons=%s candidate_reasons=%s",
-                p.id,
-                request.user.id,
-                p.match_score,
-                match_details['my_reasons'],
-                match_details['candidate_reasons'],
-            )
+            if my_profile:
+                details = MatrimonyRuleEngine.calculateMatchScore(my_profile, p)
+                p.match_score = details["score"]
+            else:
+                p.match_score = 100
             scored_profiles.append(p)
 
+        # Rank by score
         scored_profiles.sort(key=lambda x: getattr(x, 'match_score', 0), reverse=True)
+
+        page = self.paginate_queryset(scored_profiles)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            data = [item for item in serializer.data if item is not None]
+            return self.get_paginated_response(data)
+
         serializer = self.get_serializer(scored_profiles, many=True)
-        return Response(serializer.data)
+        data = [item for item in serializer.data if item is not None]
+        return Response(data)
 
 class CampaignViewSet(viewsets.ModelViewSet):
     queryset = Campaign.objects.all().order_by('-id')
     serializer_class = CampaignSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission, HasCustomRolePermission]
     
     def get_queryset(self):
         queryset = Campaign.objects.all().order_by('-id')
@@ -4178,7 +4594,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
 class DonationViewSet(viewsets.ModelViewSet):
     queryset = Donation.objects.all().order_by('-date')
     serializer_class = DonationSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission, HasCustomRolePermission]
     
     def get_queryset(self):
         queryset = Donation.objects.all().order_by('-date')
@@ -4315,6 +4731,17 @@ class EventRegistrationViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(event_id=event_id)
         return queryset
 
+    def create(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            try:
+                member = request.user.member_profile
+                has_access, err_msg = check_member_feature_limit(member, "EVENTS_UNLIMITED", increment=True)
+                if not has_access:
+                    return Response({"detail": err_msg, "upgrade_required": True}, status=status.HTTP_403_FORBIDDEN)
+            except Exception:
+                pass
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         registration = serializer.save()
         
@@ -4399,10 +4826,1096 @@ class CommunityApprovalHistoryViewSet(viewsets.ReadOnlyModelViewSet):
             
         return CommunityApprovalHistory.objects.none()
 
+class FeatureMasterViewSet(viewsets.ModelViewSet):
+    queryset = FeatureMaster.objects.all()
+    serializer_class = FeatureMasterSerializer
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['post'], url_path='scan')
+    def scan_features(self, request):
+        """
+        Dynamically scans every sidebar/application module from django routes
+        and registers them in FeatureMaster.
+        """
+        from api.urls import router
+        discovered = set()
+        for prefix, viewset, basename in router.registry:
+            discovered.add(basename.replace('_', ' ').replace('-', ' ').title())
+
+        defaults = [
+            "Dashboard", "Member Management", "Family", "Hierarchy", "Committee", 
+            "Events", "Jobs", "Business Directory", "Donations", "Venue", 
+            "Notifications", "Messaging", "Gallery", "Matrimony", "Settings", 
+            "Reports", "Analytics", "Audit Logs", "Custom Forms", "Documents", 
+            "Attendance", "Property Booking"
+        ]
+        for d in defaults:
+            discovered.add(d)
+
+        created_count = 0
+        for name in sorted(discovered):
+            code = name.lower().replace(' ', '_').replace('-', '_')
+            obj, created = FeatureMaster.objects.get_or_create(
+                code=code,
+                defaults={'name': name, 'active': True}
+            )
+            if created:
+                created_count += 1
+                
+        return Response({
+            "detail": f"Feature list scanned and synchronized. Created {created_count} new features.",
+            "total_features": FeatureMaster.objects.count()
+        })
+
 class SubscriptionPlanViewSet(viewsets.ModelViewSet):
-    queryset = SubscriptionPlan.objects.all()
+    queryset = SubscriptionPlan.objects.filter(is_archived=False).order_by('display_order')
     serializer_class = SubscriptionPlanSerializer
-    permission_classes = [permissions.AllowAny, HasCustomRolePermission]
+    permission_classes = [permissions.AllowAny]
+
+    def destroy(self, request, *args, **kwargs):
+        plan = self.get_object()
+        # Soft delete the plan instead of hard delete to prevent ensure_plans_seeded from re-creating seeded plans
+        plan.is_archived = True
+        if plan.code and plan.code not in ['free', 'basic']:
+            import time
+            plan.code = f"{plan.code}_deleted_{int(time.time())}"
+        plan.save()
+        
+        # Set referencing community subscriptions to None so they can fall back dynamically
+        CommunitySubscription.objects.filter(plan=plan).update(plan=None)
+        
+        # Log audit log
+        SubscriptionAuditLog.objects.create(
+            plan=plan,
+            field_name="is_archived",
+            old_value="False",
+            new_value="True",
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Soft deleted subscription plan"
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        plan = self.get_object()
+        new_name = request.data.get('name', f"Copy of {plan.name}")
+        new_code = request.data.get('code', f"{plan.code}_copy_{random.randint(1000, 9999)}")
+        
+        # Clone the plan
+        cloned_plan = SubscriptionPlan.objects.get(pk=plan.pk)
+        cloned_plan.pk = None
+        cloned_plan.name = new_name
+        cloned_plan.code = new_code
+        cloned_plan.save()
+        
+        # Clone all permissions
+        perms = PlanFeaturePermission.objects.filter(plan=plan)
+        for perm in perms:
+            PlanFeaturePermission.objects.create(
+                plan=cloned_plan,
+                feature=perm.feature,
+                can_view=perm.can_view,
+                can_create=perm.can_create,
+                can_edit=perm.can_edit,
+                can_delete=perm.can_delete,
+                can_export=perm.can_export,
+                can_import=perm.can_import,
+                can_approve=perm.can_approve,
+                can_reject=perm.can_reject,
+                can_assign=perm.can_assign,
+                can_manage=perm.can_manage
+            )
+        
+        # Audit Log
+        SubscriptionAuditLog.objects.create(
+            plan=cloned_plan,
+            field_name="clone",
+            old_value=str(plan.id),
+            new_value=str(cloned_plan.id),
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Cloned from plan: " + plan.name
+        )
+
+        return Response(SubscriptionPlanSerializer(cloned_plan).data)
+
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None):
+        plan = self.get_object()
+        plan.is_archived = True
+        plan.save()
+        
+        SubscriptionAuditLog.objects.create(
+            plan=plan,
+            field_name="is_archived",
+            old_value="False",
+            new_value="True",
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Plan archived by admin"
+        )
+        return Response({"detail": "Plan archived successfully."})
+
+    @action(detail=True, methods=['post'], url_path='permissions')
+    def update_permissions(self, request, pk=None):
+        plan = self.get_object()
+        permissions_data = request.data.get('permissions', [])
+        
+        for p_data in permissions_data:
+            feature_id = p_data.get('feature_id')
+            if not feature_id:
+                continue
+            feature = FeatureMaster.objects.get(pk=feature_id)
+            perm, _ = PlanFeaturePermission.objects.get_or_create(plan=plan, feature=feature)
+            perm.can_view = p_data.get('can_view', False)
+            perm.can_create = p_data.get('can_create', False)
+            perm.can_edit = p_data.get('can_edit', False)
+            perm.can_delete = p_data.get('can_delete', False)
+            perm.can_export = p_data.get('can_export', False)
+            perm.can_import = p_data.get('can_import', False)
+            perm.can_approve = p_data.get('can_approve', False)
+            perm.can_reject = p_data.get('can_reject', False)
+            perm.can_assign = p_data.get('can_assign', False)
+            perm.can_manage = p_data.get('can_manage', False)
+            perm.save()
+
+        return Response({"detail": "Permissions updated successfully."})
+
+    @action(detail=False, methods=['post'], url_path='validate-coupon')
+    def validate_coupon(self, request):
+        code = request.data.get('code', '').strip().upper()
+        plan_id = request.data.get('plan_id')
+        
+        valid_coupons = {
+            "WELCOME10": {"discount_percentage": 10, "description": "10% off on your first purchase"},
+            "SAAS50": {"discount_percentage": 50, "description": "50% mega discount"},
+            "FREE30": {"discount_percentage": 100, "description": "100% off for trial extend"},
+            "FESTIVE25": {"discount_percentage": 25, "description": "25% festive discount"}
+        }
+        
+        if code in valid_coupons:
+            coupon_info = valid_coupons[code]
+            return Response({
+                "valid": True,
+                "code": code,
+                "discount_percentage": coupon_info["discount_percentage"],
+                "description": coupon_info["description"]
+            })
+        
+        return Response({
+            "valid": False,
+            "detail": "Invalid or expired coupon code."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+class PlanFeaturePermissionViewSet(viewsets.ModelViewSet):
+    queryset = PlanFeaturePermission.objects.all()
+    serializer_class = PlanFeaturePermissionSerializer
+    permission_classes = [permissions.AllowAny]
+
+from django.db import transaction
+
+@transaction.atomic
+def ensure_plans_seeded():
+    from api.models import SubscriptionPlan, FeatureMaster, PlanFeaturePermission, CommunitySubscription, Community, FeatureUsage, ApplicationModule
+    
+    # 0. Seed SubscriptionPlan objects if they don't exist
+    SubscriptionPlan.objects.get_or_create(
+        code="free",
+        defaults={
+            "name": "Free",
+            "description": "Standard free plan with basic limits",
+            "monthly_price": 0,
+            "yearly_price": 0,
+            "max_members": 50,
+            "max_family_members": 200,
+            "max_events": 5,
+            "max_businesses": 5,
+            "max_matrimony_profiles": 5,
+            "max_gallery_images": 50,
+            "max_storage_gb": 1,
+        }
+    )
+    
+    SubscriptionPlan.objects.get_or_create(
+        code="basic",
+        defaults={
+            "name": "Basic",
+            "description": "Basic subscription plan",
+            "monthly_price": 499,
+            "yearly_price": 4999,
+            "max_members": 500,
+            "max_family_members": 2000,
+            "max_events": 20,
+            "max_businesses": 20,
+            "max_matrimony_profiles": 100,
+            "max_gallery_images": 500,
+            "max_storage_gb": 5,
+        }
+    )
+
+    # 1. Create FeatureMaster entries for all core modules if they don't exist
+    core_features = [
+        {"code": "dashboard", "name": "Dashboard"},
+        {"code": "members", "name": "Member Management"},
+        {"code": "family", "name": "Family"},
+        {"code": "committee", "name": "Committee"},
+        {"code": "hierarchy", "name": "Hierarchy"},
+        {"code": "events", "name": "Events"},
+        {"code": "jobs", "name": "Jobs"},
+        {"code": "businesses", "name": "Business Directory"},
+        {"code": "donations", "name": "Donations"},
+        {"code": "venues", "name": "Property Booking"},
+        {"code": "gallery", "name": "Gallery"},
+        {"code": "matrimony", "name": "Matrimony"},
+        {"code": "messages", "name": "Messages"},
+        {"code": "notifications", "name": "Notifications"},
+        {"code": "settings", "name": "Settings"},
+        {"code": "plans", "name": "Plans"},
+        {"code": "subscriptions", "name": "Subscription"},
+        {"code": "attendance", "name": "Attendance"},
+        {"code": "property_booking", "name": "Property Booking"},
+        {"code": "analytics", "name": "Analytics"},
+        {"code": "white_label", "name": "White Label"},
+        {"code": "domain_mapping", "name": "Domain Mapping"},
+    ]
+    
+    for f in core_features:
+        FeatureMaster.objects.get_or_create(
+            code=f["code"],
+            defaults={"name": f["name"], "active": True}
+        )
+
+    # Make sure all registered ApplicationModules also exist in FeatureMaster
+    for mod in ApplicationModule.objects.filter(deleted_at__isnull=True):
+        FeatureMaster.objects.get_or_create(
+            code=mod.module_code,
+            defaults={"name": mod.display_name, "active": True}
+        )
+
+    # Setup subscription for all communities
+    for comm in Community.objects.all():
+        sub = CommunitySubscription.objects.filter(community=comm).first()
+        if not sub:
+            plan_code = (comm.plan or "basic").lower()
+            plan = SubscriptionPlan.objects.filter(code=plan_code).first()
+            if not plan:
+                plan = SubscriptionPlan.objects.first()
+            
+            sub = CommunitySubscription.objects.create(
+                community=comm,
+                plan=plan,
+                status="Active"
+            )
+            
+            metrics = [
+                ('members', plan.max_members if plan else 100),
+                ('communities', plan.max_communities if plan else 5),
+                ('family_members', plan.max_family_members if plan else 2000),
+                ('committee_members', plan.max_committee_members if plan else 20),
+                ('admin_users', plan.max_admin_users if plan else 5),
+                ('staff_users', plan.max_staff_users if plan else 10),
+                ('events', plan.max_events if plan else 20),
+                ('venues', plan.max_venues if plan else 3),
+                ('donations', plan.max_donations if plan else 50000),
+                ('jobs', plan.max_jobs if plan else 20),
+                ('businesses', plan.max_businesses if plan else 20),
+                ('matrimony_profiles', plan.max_matrimony_profiles if plan else 100),
+                ('gallery_images', plan.max_gallery_images if plan else 1000),
+                ('storage', plan.max_storage_gb if plan else 5),
+                ('api_calls', plan.max_api_calls if plan else 10000),
+                ('notifications', plan.max_notifications if plan else 100),
+                ('sms', plan.max_sms if plan else 500),
+                ('email_credits', plan.max_email_credits if plan else 5000),
+                ('whatsapp_credits', plan.max_whatsapp_credits if plan else 100)
+            ]
+            for metric, limit in metrics:
+                FeatureUsage.objects.get_or_create(
+                    community=comm,
+                    metric=metric,
+                    defaults={'max_limit': limit, 'current_usage': 0}
+                )
+
+        # Seed CommunityLicense
+        from api.models import (
+            CommunityLicense, CommunityModuleAccess, CommunityUsage,
+            CommunityBilling, CommunityInvoice, CommunityTransaction,
+            CommunityAddon, CommunityAuditLog
+        )
+        import uuid
+        
+        CommunityLicense.objects.get_or_create(
+            community=comm,
+            defaults={
+                'license_key': f"LIC-{uuid.uuid4().hex[:12].upper()}",
+                'version': '1.0',
+                'status': 'Active'
+            }
+        )
+
+        # Seed CommunityModuleAccess
+        for fm in FeatureMaster.objects.all():
+            mod = ApplicationModule.objects.filter(module_code=fm.code, deleted_at__isnull=True).first()
+            if mod:
+                CommunityModuleAccess.objects.get_or_create(
+                    community=comm,
+                    module=mod,
+                    defaults={
+                        'enabled': True,
+                        'purchased_addon': False,
+                        'usage_limit': getattr(sub.plan, f"max_{fm.code}", 0) if hasattr(sub.plan, f"max_{fm.code}") else 0,
+                        'current_usage': 0
+                    }
+                )
+
+        # Seed CommunityUsage
+        CommunityUsage.objects.get_or_create(
+            community=comm,
+            defaults={
+                'members': Member.objects.filter(community=comm).count(),
+                'families': Family.objects.filter(community=comm).count(),
+                'businesses': Business.objects.filter(community=comm).count(),
+                'events': Event.objects.filter(community=comm).count(),
+                'jobs': Job.objects.filter(community=comm).count(),
+                'donations': Donation.objects.filter(campaign__community=comm).count(),
+                'gallery': Gallery.objects.filter(community=comm).count(),
+                'properties': BookingProperty.objects.filter(community=comm).count() if hasattr(comm, 'booking_properties') else 0,
+                'storage': 100,  # mock storage MB
+                'api': 1200,
+                'sms': 450,
+                'email': 2400,
+                'whatsapp': 80
+            }
+        )
+
+        # Seed CommunityBilling
+        billing, _ = CommunityBilling.objects.get_or_create(
+            community=comm,
+            defaults={
+                'billing_address': "123 Main Street, Community Center Complex",
+                'gst': "27AAAAA1111A1Z1",
+                'pan': "ABCDE1234F",
+                'currency': 'INR',
+                'payment_method': 'UPI / Net Banking',
+                'wallet_balance': 500.00,
+                'outstanding': 0.00,
+                'credits': 100.00
+            }
+        )
+
+        # Seed CommunityInvoice & transactions if none exist
+        if not CommunityInvoice.objects.filter(community=comm).exists():
+            import random
+            invoice_no = f"INV-COMM-{random.randint(100000, 999999)}"
+            inv = CommunityInvoice.objects.create(
+                community=comm,
+                invoice_no=invoice_no,
+                tax=180.00,
+                discount=0.00,
+                coupon="",
+                amount=1180.00,
+                status="Paid",
+                pdf_url=f"/media/invoices/{invoice_no}.pdf"
+            )
+            CommunityTransaction.objects.create(
+                invoice=inv,
+                reference=f"TXN-{uuid.uuid4().hex[:12].upper()}",
+                method="UPI",
+                gateway="Razorpay",
+                status="Success",
+                amount=1180.00
+            )
+
+class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
+    queryset = CommunitySubscription.objects.all()
+    serializer_class = CommunitySubscriptionSerializer
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['get'], url_path='check-access')
+    def check_access(self, request):
+        ensure_plans_seeded()
+        module_code = request.query_params.get('module')
+        action_name = request.query_params.get('action', 'view')
+        
+        if not module_code:
+            return Response({"detail": "module parameter is required"}, status=400)
+            
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"has_access": False, "status": "Disabled", "detail": "User not authenticated"})
+            
+        is_super = user.is_superuser
+        try:
+            member = user.member_profile
+            if member and member.role == 'super_admin':
+                is_super = True
+        except Exception:
+            member = None
+            
+        if is_super:
+            return Response({"has_access": True, "status": "Enabled", "detail": "Super Admin access override"})
+            
+        if not member:
+            return Response({"has_access": False, "status": "Disabled", "detail": "No member profile associated"})
+            
+        community = None
+        try:
+            community = user.member_profile.community
+        except Exception:
+            pass
+            
+        if not community:
+            return Response({"has_access": False, "status": "Disabled", "detail": "No community associated"})
+            
+        sub = CommunitySubscription.objects.filter(community=community).first()
+        if not sub:
+            plan = SubscriptionPlan.objects.filter(code="basic").first()
+            if not plan:
+                plan = SubscriptionPlan.objects.first()
+            sub = CommunitySubscription.objects.create(
+                community=community,
+                plan=plan,
+                status="Active"
+            )
+            
+        if sub.status in ['Expired', 'Suspended', 'Cancelled']:
+            if module_code not in ['dashboard', 'settings', 'plans', 'subscriptions']:
+                return Response({
+                    "has_access": False,
+                    "status": "Disabled",
+                    "reason": f"Subscription status is {sub.status}"
+                })
+                
+        plan = sub.plan
+        
+        fm = FeatureMaster.objects.filter(code=module_code).first()
+        if not fm:
+            mod = ApplicationModule.objects.filter(module_code=module_code, deleted_at__isnull=True).first()
+            if not mod:
+                return Response({"has_access": False, "status": "Disabled", "reason": "Module not registered"})
+            fm, _ = FeatureMaster.objects.get_or_create(
+                code=module_code,
+                defaults={"name": mod.display_name, "description": mod.description or ""}
+            )
+            
+        perm = PlanFeaturePermission.objects.filter(plan=plan, feature=fm).first()
+        if not perm:
+            perm = PlanFeaturePermission.objects.create(
+                plan=plan,
+                feature=fm,
+                can_view=True,
+                can_create=True,
+                can_edit=True,
+                can_delete=True
+            )
+            
+        action_mapping = {
+            'view': perm.can_view,
+            'create': perm.can_create,
+            'edit': perm.can_edit,
+            'delete': perm.can_delete,
+            'approve': perm.can_approve,
+            'reject': perm.can_reject,
+            'manage': perm.can_manage,
+            'export': perm.can_export,
+            'import': perm.can_import,
+            'assign': perm.can_assign
+        }
+        
+        has_perm = action_mapping.get(action_name, perm.can_view)
+        
+        if not has_perm:
+            upgrade_required = False
+            all_plans = list(SubscriptionPlan.objects.all().order_by('monthly_price'))
+            for p_other in all_plans:
+                if plan and p_other.monthly_price > plan.monthly_price:
+                    perm_other = PlanFeaturePermission.objects.filter(plan=p_other, feature=fm).first()
+                    if perm_other and getattr(perm_other, f"can_{action_name}", False):
+                        upgrade_required = True
+                        break
+            return Response({
+                "has_access": False,
+                "status": "Upgrade Required" if upgrade_required else "Disabled",
+                "reason": "Feature permission restricted for current plan"
+            })
+            
+        limit_mapping = {
+            "members": lambda: Member.objects.filter(community=community).count(),
+            "family": lambda: Family.objects.filter(community=community).count(),
+            "events": lambda: Event.objects.filter(community=community).count(),
+            "businesses": lambda: Business.objects.filter(community=community).count(),
+            "matrimony": lambda: MatrimonyProfile.objects.filter(community=community).count(),
+            "committee": lambda: Committee.objects.filter(community=community).count(),
+            "gallery": lambda: Gallery.objects.filter(community=community).count()
+        }
+        
+        if module_code in limit_mapping:
+            current_val = limit_mapping[module_code]()
+            max_limit = getattr(plan, f"max_{module_code}", 0) if plan else 0
+            if module_code == "members": max_limit = plan.max_members if plan else 0
+            if module_code == "family": max_limit = plan.max_family_members if plan else 0
+            if module_code == "committee": max_limit = plan.max_committee_members if plan else 0
+            if module_code == "gallery": max_limit = plan.max_gallery_images if plan else 0
+            
+            if max_limit > 0 and current_val >= max_limit:
+                return Response({
+                    "has_access": False,
+                    "status": "Limited",
+                    "reason": f"Limit of {max_limit} reached for {module_code}",
+                    "current": current_val,
+                    "limit": max_limit
+                })
+                
+        return Response({
+            "has_access": True,
+            "status": "Enabled"
+        })
+
+    @action(detail=False, methods=['get'], url_path='my-plan')
+    def get_my_plan(self, request):
+        ensure_plans_seeded()
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=401)
+            
+        community = None
+        try:
+            community = user.member_profile.community
+        except Exception:
+            pass
+            
+        if not community:
+            community = Community.objects.first()
+            if not community:
+                return Response({"detail": "No community found"}, status=404)
+                
+        sub = CommunitySubscription.objects.filter(community=community).first()
+        if not sub:
+            plan = SubscriptionPlan.objects.filter(code="basic").first()
+            if not plan:
+                plan = SubscriptionPlan.objects.first()
+            sub = CommunitySubscription.objects.create(
+                community=community,
+                plan=plan,
+                status="Active"
+            )
+            
+        plan = sub.plan
+        
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc) if sub.end_date and sub.end_date.tzinfo else datetime.datetime.now()
+        
+        countdown_days = 0
+        if sub.end_date:
+            delta = sub.end_date - now
+            countdown_days = max(0, delta.days)
+            
+        validity_desc = "Lifetime Access"
+        if sub.end_date:
+            validity_desc = f"Valid until {sub.end_date.strftime('%B %d, %Y')}"
+            
+        header = {
+            "plan_name": plan.name if plan else "Free",
+            "plan_code": plan.code if plan else "free",
+            "community_name": community.name,
+            "status": sub.status,
+            "auto_renew": sub.auto_renew,
+            "countdown_days": countdown_days,
+            "validity_desc": validity_desc,
+            "start_date": sub.start_date,
+            "end_date": sub.end_date,
+            "trial_ends_at": sub.trial_ends_at,
+            "grace_period_ends_at": sub.grace_period_ends_at
+        }
+        
+        members_count = Member.objects.filter(community=community).count()
+        families_count = Family.objects.filter(community=community).count()
+        events_count = Event.objects.filter(community=community).count()
+        businesses_count = Business.objects.filter(community=community).count()
+        matrimony_count = MatrimonyProfile.objects.filter(community=community).count()
+        committee_count = Committee.objects.filter(community=community).count()
+        gallery_count = Gallery.objects.filter(community=community).count()
+        
+        # Calculate media sizes
+        import os
+        from django.conf import settings
+        total_size_bytes = 0
+        try:
+            for root, dirs, files in os.walk(settings.MEDIA_ROOT):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    if os.path.exists(fp):
+                        total_size_bytes += os.path.getsize(fp)
+        except Exception:
+            pass
+        if total_size_bytes < 1024 * 1024:
+            total_size_bytes = (gallery_count * 1.5 * 1024 * 1024) + (committee_count * 0.5 * 1024 * 1024) + (1.2 * 1024 * 1024)
+            
+        storage_used_gb = round(total_size_bytes / (1024 * 1024 * 1024), 2)
+        if storage_used_gb < 0.01:
+            storage_used_gb = 0.01
+            
+        def get_usage(metric, default_limit):
+            fu = FeatureUsage.objects.filter(community=community, metric=metric).first()
+            if fu:
+                return fu.current_usage, fu.max_limit
+            from api.models import UsageCounter
+            uc = UsageCounter.objects.filter(community=community, metric=metric).first()
+            if uc:
+                return uc.count, default_limit
+            return 0, default_limit
+
+        sms_used, sms_limit = get_usage('sms', plan.max_sms if plan else 100)
+        email_used, email_limit = get_usage('email_credits', plan.max_email_credits if plan else 1000)
+        whatsapp_used, whatsapp_limit = get_usage('whatsapp_credits', plan.max_whatsapp_credits if plan else 50)
+        api_used, api_limit = get_usage('api_calls', plan.max_api_calls if plan else 1000)
+
+        usage = [
+            {"metric": "Members", "current": members_count, "limit": plan.max_members if plan else 50, "unit": ""},
+            {"metric": "Families", "current": families_count, "limit": plan.max_family_members if plan else 200, "unit": ""},
+            {"metric": "Events", "current": events_count, "limit": plan.max_events if plan else 5, "unit": ""},
+            {"metric": "Businesses", "current": businesses_count, "limit": plan.max_businesses if plan else 5, "unit": ""},
+            {"metric": "Gallery", "current": gallery_count, "limit": plan.max_gallery_images if plan else 100, "unit": ""},
+            {"metric": "Matrimony Profiles", "current": matrimony_count, "limit": plan.max_matrimony_profiles if plan else 10, "unit": ""},
+            {"metric": "Committee", "current": committee_count, "limit": plan.max_committee_members if plan else 5, "unit": ""},
+            {"metric": "Storage", "current": storage_used_gb, "limit": plan.max_storage_gb if plan else 1, "unit": "GB"},
+            {"metric": "API Calls", "current": api_used, "limit": api_limit, "unit": ""},
+            {"metric": "SMS", "current": sms_used, "limit": sms_limit, "unit": ""},
+            {"metric": "Email", "current": email_used, "limit": email_limit, "unit": ""},
+            {"metric": "WhatsApp", "current": whatsapp_used, "limit": whatsapp_limit, "unit": ""}
+        ]
+
+        for u in usage:
+            lim = u["limit"]
+            if lim > 0:
+                u["percentage"] = min(100, round((u["current"] / lim) * 100))
+            else:
+                u["percentage"] = 0
+                
+        features = []
+        modules = ApplicationModule.objects.filter(deleted_at__isnull=True).order_by('sort_order')
+        all_plans = list(SubscriptionPlan.objects.all().order_by('monthly_price'))
+        
+        for mod in modules:
+            fm = FeatureMaster.objects.filter(code=mod.module_code).first()
+            if not fm:
+                continue
+                
+            perm = PlanFeaturePermission.objects.filter(plan=plan, feature=fm).first()
+            has_view = perm.can_view if perm else False
+            
+            status_val = "Disabled"
+            upgrade_plan_name = None
+            
+            if has_view:
+                status_val = "Enabled"
+                limit_mapping = {
+                    "members": members_count,
+                    "family": families_count,
+                    "events": events_count,
+                    "businesses": businesses_count,
+                    "matrimony": matrimony_count,
+                    "committee": committee_count,
+                    "gallery": gallery_count
+                }
+                
+                metric_key = mod.module_code
+                if metric_key in limit_mapping:
+                    cur = limit_mapping[metric_key]
+                    max_lim = getattr(plan, f"max_{metric_key}", 0) if plan else 0
+                    if metric_key == "members": max_lim = plan.max_members if plan else 0
+                    if metric_key == "family": max_lim = plan.max_family_members if plan else 0
+                    if metric_key == "committee": max_lim = plan.max_committee_members if plan else 0
+                    if metric_key == "gallery": max_lim = plan.max_gallery_images if plan else 0
+                    
+                    if max_lim > 0:
+                        if cur >= max_lim:
+                            status_val = "Limited"
+                        elif cur >= max_lim * 0.9:
+                            status_val = "Limited"
+            else:
+                for p_other in all_plans:
+                    if plan and p_other.monthly_price > plan.monthly_price:
+                        perm_other = PlanFeaturePermission.objects.filter(plan=p_other, feature=fm).first()
+                        if perm_other and perm_other.can_view:
+                            status_val = "Upgrade Required"
+                            upgrade_plan_name = p_other.name
+                            break
+                            
+            features.append({
+                "name": mod.display_name,
+                "code": mod.module_code,
+                "status": status_val,
+                "upgrade_plan": upgrade_plan_name,
+                "icon": mod.icon,
+                "route": mod.route
+            })
+            
+        plans_compare = []
+        for p in all_plans:
+            p_perms = PlanFeaturePermission.objects.filter(plan=p)
+            p_features = []
+            for perm in p_perms:
+                if perm.can_view:
+                    p_features.append(perm.feature.name)
+            
+            plans_compare.append({
+                "id": p.id,
+                "name": p.name,
+                "code": p.code,
+                "monthly_price": p.monthly_price,
+                "yearly_price": p.yearly_price,
+                "trial_days": p.trial_days,
+                "max_members": p.max_members,
+                "max_storage_gb": p.max_storage_gb,
+                "max_sms": p.max_sms,
+                "color_theme": p.color_theme,
+                "display_badge": p.display_badge,
+                "is_popular": p.is_popular,
+                "is_recommended": p.is_recommended,
+                "is_best_value": p.is_best_value,
+                "is_enterprise": p.is_enterprise,
+                "description": p.description,
+                "features": p_features,
+                "is_current": plan is not None and p.id == plan.id
+            })
+            
+        history = SubscriptionHistory.objects.filter(community=community).order_by('-created_at')
+        billing_history = []
+        for h in history:
+            billing_history.append({
+                "id": h.id,
+                "date": h.created_at.strftime("%Y-%m-%d"),
+                "plan_name": h.plan.name if h.plan else "N/A",
+                "action": h.action,
+                "amount": float(h.amount),
+                "billing_cycle": h.billing_cycle,
+                "invoice_no": h.invoice_no,
+                "gst_invoice_no": h.gst_invoice_no,
+                "payment_method": h.payment_method,
+                "transaction_id": h.transaction_id,
+                "notes": h.notes
+            })
+            
+        system_notifications = []
+        
+        if countdown_days > 0 and countdown_days <= 7:
+            system_notifications.append({
+                "type": "warning",
+                "code": "renewal_reminder",
+                "message": f"Renewal Due — Your plan expires in {countdown_days} days."
+            })
+        elif sub.end_date and countdown_days == 0:
+            system_notifications.append({
+                "type": "error",
+                "code": "plan_expired",
+                "message": "Subscription Expired — Please renew your plan to restore full access."
+            })
+            
+        if sub.status == "Trial" and countdown_days > 0 and countdown_days <= 3:
+            system_notifications.append({
+                "type": "warning",
+                "code": "trial_expiring",
+                "message": f"Trial Expiring — Your free trial ends in {countdown_days} days. Upgrade now!"
+            })
+            
+        if plan and plan.max_storage_gb > 0:
+            storage_percentage = (storage_used_gb / plan.max_storage_gb) * 100
+            if storage_percentage >= 95:
+                system_notifications.append({
+                    "type": "error",
+                    "code": "storage_full",
+                    "message": "Storage limit reached. Uploads are disabled until you upgrade your storage."
+                })
+            elif storage_percentage >= 80:
+                system_notifications.append({
+                    "type": "warning",
+                    "code": "storage_near_limit",
+                    "message": f"Storage is {round(storage_percentage)}% full. Consider upgrading your plan."
+                })
+                
+        if plan and plan.max_members > 0:
+            member_percentage = (members_count / plan.max_members) * 100
+            if member_percentage >= 100:
+                system_notifications.append({
+                    "type": "error",
+                    "code": "members_full",
+                    "message": "Member limit reached. You cannot add new members until you upgrade your plan."
+                })
+            elif member_percentage >= 90:
+                system_notifications.append({
+                    "type": "warning",
+                    "code": "members_near_limit",
+                    "message": f"Community is {round(member_percentage)}% full. Upgrade to support more members."
+                })
+                
+        return Response({
+            "header": header,
+            "usage": usage,
+            "features": features,
+            "plans": plans_compare,
+            "billing_history": billing_history,
+            "notifications": system_notifications
+        })
+
+    @action(detail=False, methods=['post'], url_path='assign')
+    def assign_plan(self, request):
+        ensure_plans_seeded()
+        community_id = request.data.get('community_id')
+        plan_id = request.data.get('plan_id')
+        billing_cycle = request.data.get('billing_cycle', 'Monthly')
+        price_paid = request.data.get('price_paid', 0)
+        
+        community = Community.objects.get(pk=community_id)
+        plan = SubscriptionPlan.objects.get(pk=plan_id)
+        
+        sub, created = CommunitySubscription.objects.get_or_create(
+            community=community,
+            defaults={'plan': plan, 'status': 'Active'}
+        )
+        
+        old_plan_name = sub.plan.name if sub.plan else "None"
+        sub.plan = plan
+        sub.status = 'Active'
+        
+        now = datetime.datetime.now()
+        sub.start_date = now
+        if billing_cycle == 'Monthly':
+            sub.end_date = now + datetime.timedelta(days=30)
+        elif billing_cycle == 'Yearly':
+            sub.end_date = now + datetime.timedelta(days=365)
+        else:
+            sub.end_date = None
+            
+        sub.save()
+        
+        invoice_no = f"INV-{random.randint(100000, 999999)}"
+        gst_invoice_no = f"GST-{random.randint(100000, 999999)}"
+        SubscriptionHistory.objects.create(
+            community=community,
+            plan=plan,
+            action="Created" if created else "Upgraded",
+            amount=price_paid,
+            billing_cycle=billing_cycle,
+            invoice_no=invoice_no,
+            gst_invoice_no=gst_invoice_no,
+            notes=f"Assigned plan {plan.name} to community {community.name}."
+        )
+
+        SubscriptionAuditLog.objects.create(
+            community=community,
+            field_name="plan",
+            old_value=old_plan_name,
+            new_value=plan.name,
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Assigned new subscription plan"
+        )
+        
+        metrics = [
+            ('members', plan.max_members),
+            ('communities', plan.max_communities),
+            ('family_members', plan.max_family_members),
+            ('committee_members', plan.max_committee_members),
+            ('admin_users', plan.max_admin_users),
+            ('staff_users', plan.max_staff_users),
+            ('events', plan.max_events),
+            ('venues', plan.max_venues),
+            ('donations', plan.max_donations),
+            ('jobs', plan.max_jobs),
+            ('businesses', plan.max_businesses),
+            ('matrimony_profiles', plan.max_matrimony_profiles),
+            ('gallery_images', plan.max_gallery_images),
+            ('storage', plan.max_storage_gb),
+            ('api_calls', plan.max_api_calls),
+            ('notifications', plan.max_notifications),
+            ('sms', plan.max_sms),
+            ('email_credits', plan.max_email_credits),
+            ('whatsapp_credits', plan.max_whatsapp_credits)
+        ]
+        
+        for metric, limit in metrics:
+            FeatureUsage.objects.update_or_create(
+                community=community,
+                metric=metric,
+                defaults={'max_limit': limit}
+            )
+
+        return Response(CommunitySubscriptionSerializer(sub).data)
+
+    @action(detail=True, methods=['post'], url_path='renew')
+    def renew_plan(self, request, pk=None):
+        ensure_plans_seeded()
+        sub = self.get_object()
+        if not sub.plan:
+            return Response({"detail": "Cannot renew subscription because no plan is currently assigned."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        billing_cycle = request.data.get('billing_cycle', 'Monthly')
+        price_paid = request.data.get('price_paid', sub.plan.monthly_price if billing_cycle == 'Monthly' else sub.plan.yearly_price)
+        
+        now = datetime.datetime.now()
+        base_date = sub.end_date if sub.end_date and sub.end_date > now else now
+        
+        if billing_cycle == 'Monthly':
+            sub.end_date = base_date + datetime.timedelta(days=30)
+        elif billing_cycle == 'Yearly':
+            sub.end_date = base_date + datetime.timedelta(days=365)
+        else:
+            sub.end_date = None
+            
+        sub.status = 'Active'
+        sub.save()
+        
+        invoice_no = f"INV-{random.randint(100000, 999999)}"
+        gst_invoice_no = f"GST-{random.randint(100000, 999999)}"
+        SubscriptionHistory.objects.create(
+            community=sub.community,
+            plan=sub.plan,
+            action="Renewed",
+            amount=price_paid,
+            billing_cycle=billing_cycle,
+            invoice_no=invoice_no,
+            gst_invoice_no=gst_invoice_no,
+            notes=f"Renewed subscription plan {sub.plan.name}."
+        )
+
+        SubscriptionAuditLog.objects.create(
+            community=sub.community,
+            field_name="status",
+            old_value="Grace Period / Expired",
+            new_value="Active",
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Renewed subscription plan"
+        )
+        
+        return Response(CommunitySubscriptionSerializer(sub).data)
+
+    @action(detail=True, methods=['post'], url_path='cancel')
+    def cancel_plan(self, request, pk=None):
+        ensure_plans_seeded()
+        sub = self.get_object()
+        sub.auto_renew = False
+        sub.save()
+        
+        SubscriptionHistory.objects.create(
+            community=sub.community,
+            plan=sub.plan,
+            action="Cancelled Renewal",
+            amount=0,
+            notes="Cancelled auto-renewal of subscription plan."
+        )
+        
+        SubscriptionAuditLog.objects.create(
+            community=sub.community,
+            field_name="auto_renew",
+            old_value="True",
+            new_value="False",
+            changed_by=request.user if request.user.is_authenticated else None,
+            reason="Cancelled auto-renewal"
+        )
+        return Response({"detail": "Auto-renewal cancelled successfully."})
+
+    @action(detail=True, methods=['get'], url_path='usage')
+    def usage_statistics(self, request, pk=None):
+        ensure_plans_seeded()
+        sub = self.get_object()
+        usages = FeatureUsage.objects.filter(community=sub.community)
+        return Response(FeatureUsageSerializer(usages, many=True).data)
+
+class SubscriptionHistoryViewSet(viewsets.ModelViewSet):
+    queryset = SubscriptionHistory.objects.all().order_by('-created_at')
+    serializer_class = SubscriptionHistorySerializer
+    permission_classes = [permissions.AllowAny]
+
+class PlanAddonViewSet(viewsets.ModelViewSet):
+    queryset = PlanAddon.objects.all()
+    serializer_class = PlanAddonSerializer
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['post'], url_path='purchase')
+    def purchase_addon(self, request):
+        from api.models import (
+            Community, PlanAddon, CommunityAddon, FeatureUsage,
+            CommunityInvoice, CommunityTransaction, CommunityAuditLog
+        )
+        import random, uuid, datetime
+
+        addon_id = request.data.get('addon_id')
+        quantity = int(request.data.get('quantity', 1))
+        community_id = request.data.get('community_id')
+
+        if not addon_id or not community_id:
+            return Response({"detail": "addon_id and community_id are required."}, status=400)
+
+        try:
+            addon = PlanAddon.objects.get(pk=addon_id)
+            community = Community.objects.get(pk=community_id)
+        except (PlanAddon.DoesNotExist, Community.DoesNotExist):
+            return Response({"detail": "Addon or Community not found."}, status=404)
+
+        # 1. Create/update CommunityAddon
+        comm_addon, created = CommunityAddon.objects.get_or_create(
+            community=community,
+            addon=addon,
+            defaults={'quantity': quantity, 'status': 'Active'}
+        )
+        if not created:
+            comm_addon.quantity += quantity
+            comm_addon.save()
+
+        # 2. Update FeatureUsage limit
+        fu = FeatureUsage.objects.filter(community=community, metric=addon.limit_type).first()
+        if fu:
+            fu.max_limit += addon.limit_value * quantity
+            fu.save()
+
+        # 3. Create Invoice & Transaction
+        total_amount = addon.price * quantity
+        invoice_no = f"INV-ADDON-{random.randint(100000, 999999)}"
+        inv = CommunityInvoice.objects.create(
+            community=community,
+            invoice_no=invoice_no,
+            tax=total_amount * 0.18,
+            discount=0.00,
+            coupon="",
+            amount=total_amount * 1.18,
+            status="Paid",
+            pdf_url=f"/media/invoices/{invoice_no}.pdf"
+        )
+        CommunityTransaction.objects.create(
+            invoice=inv,
+            reference=f"TXN-{uuid.uuid4().hex[:12].upper()}",
+            method="Stripe / Card",
+            gateway="Razorpay",
+            status="Success",
+            amount=total_amount * 1.18
+        )
+
+        # 4. Audit Log
+        CommunityAuditLog.objects.create(
+            community=community,
+            user=request.user if request.user.is_authenticated else None,
+            action="Add-on Purchased",
+            old_value=str(comm_addon.quantity - quantity if not created else 0),
+            new_value=str(comm_addon.quantity),
+            reason=f"Purchased add-on: {addon.name} x {quantity}"
+        )
+
+        return Response({
+            "detail": f"Successfully purchased {addon.name} x {quantity}.",
+            "addon": {
+                "id": comm_addon.id,
+                "addon_id": addon.id,
+                "addon_name": addon.name,
+                "quantity": comm_addon.quantity
+            }
+        })
+
+class FeatureUsageViewSet(viewsets.ModelViewSet):
+    queryset = FeatureUsage.objects.all()
+    serializer_class = FeatureUsageSerializer
+    permission_classes = [permissions.AllowAny]
+
+class SubscriptionAuditLogViewSet(viewsets.ModelViewSet):
+    queryset = SubscriptionAuditLog.objects.all().order_by('-date')
+    serializer_class = SubscriptionAuditLogSerializer
+    permission_classes = [permissions.AllowAny]
 
 class RoleViewSet(viewsets.ModelViewSet):
     queryset = Role.objects.all()
@@ -4450,8 +5963,13 @@ class ForgotPasswordView(APIView):
 
         # IMPORTANT: all otp's must also show in terminal
         import sys
-        sys.stderr.write(f"\n============================================================\n[FORGOT PASSWORD OTP] Email: {email} | OTP: {otp_code} | Expiry: {expiry_time}\n============================================================\n")
-        sys.stderr.flush()
+        print(f"\n{'='*60}")
+        print(f"[OTP] FORGOT PASSWORD OTP")
+        print(f"[OTP] Email   : {email}")
+        print(f"[OTP] Code    : {otp_code}")
+        print(f"[OTP] Expiry  : {expiry_time}")
+        print(f"{'='*60}\n")
+        sys.stdout.flush()
 
         from .emails import send_project_email
         try:
@@ -4678,7 +6196,7 @@ from api.serializers import MessageRequestSerializer, ConversationSerializer, Me
 
 class MessageRequestViewSet(viewsets.ModelViewSet):
     serializer_class = MessageRequestSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission]
 
     def get_queryset(self):
         member = Member.objects.filter(user=self.request.user).first()
@@ -4823,7 +6341,7 @@ class MessageRequestViewSet(viewsets.ModelViewSet):
 
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission]
 
     def get_queryset(self):
         member = Member.objects.filter(user=self.request.user).first()
@@ -4847,7 +6365,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission]
 
     def get_queryset(self):
         member = Member.objects.filter(user=self.request.user).first()
@@ -4859,6 +6377,13 @@ class MessageViewSet(viewsets.ModelViewSet):
         sender_member = Member.objects.filter(user=request.user).first()
         if not sender_member:
             return Response({"detail": "User has no associated member profile."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            has_access, err_msg = check_member_feature_limit(sender_member, "UNLIMITED_CHAT", increment=True)
+            if not has_access:
+                return Response({"detail": err_msg, "upgrade_required": True}, status=status.HTTP_403_FORBIDDEN)
+        except Exception:
+            pass
         
         conversation_id = request.data.get('conversation') or request.data.get('conversation_id')
         if not conversation_id:
@@ -5138,7 +6663,7 @@ class BookingPropertyViewSet(viewsets.ModelViewSet):
 
         all_available, details = _availability_for_resources(property_obj, resource_ids, start_dt, end_dt)
         selected_resources = property_obj.resources.filter(id__in=resource_ids, status='Active')
-        pricing = _calculate_booking_price(selected_resources, start_dt, end_dt, request.data.get('extra_charges', 0))
+        pricing = _calculate_booking_price(selected_resources, start_dt, end_dt, request.data.get('extra_charges', 0), property_obj.tax_percentage, property_obj.security_deposit)
         suggestions = []
         if not all_available:
             other_resources = property_obj.resources.exclude(id__in=resource_ids).filter(status='Active')
@@ -5171,7 +6696,7 @@ class BookingPropertyViewSet(viewsets.ModelViewSet):
         except Exception as exc:
             return Response({'error': str(exc) or 'Invalid date or time format.'}, status=400)
         resources = property_obj.resources.filter(id__in=resource_ids, status='Active')
-        return Response(_calculate_booking_price(resources, start_dt, end_dt, request.data.get('extra_charges', 0)))
+        return Response(_calculate_booking_price(resources, start_dt, end_dt, request.data.get('extra_charges', 0), property_obj.tax_percentage, property_obj.security_deposit))
 
 class PropertyResourceViewSet(viewsets.ModelViewSet):
     serializer_class = PropertyResourceSerializer
@@ -5328,7 +6853,7 @@ class ResourceDependencyViewSet(viewsets.ModelViewSet):
 
 class VenueBookingViewSet(viewsets.ModelViewSet):
     serializer_class = VenueBookingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, MemberPremiumModulePermission]
 
     def _member(self):
         return Member.objects.filter(user=self.request.user).select_related('community').first()
@@ -5389,18 +6914,43 @@ class VenueBookingViewSet(viewsets.ModelViewSet):
 
         # Validate Dependencies
         selected_ids = {res.id for res in resources}
+        
+        # 1. Parent -> Child Dependency
+        # Rule: If resource A is booked, then its required resources MUST be booked.
         for res in resources:
-            for dep in res.dependencies.all():
+            for dep in res.dependencies.filter(dependency_type='parent_child'):
                 if dep.requires.id not in selected_ids:
                     from rest_framework.exceptions import ValidationError
                     raise ValidationError({'resources': f'{res.name} requires {dep.requires.name} to be booked together.'})
+
+        # 2. Combination Dependency
+        # Rule: If ALL condition resources (the ones pointing TO a target) are booked, the target MUST be booked.
+        # Group combination dependencies by their target (`requires`)
+        all_property_resources = prop.resources.filter(status='Active').prefetch_related('required_by')
+        for target_res in all_property_resources:
+            # Get all combination rules pointing TO this target
+            combo_deps = target_res.required_by.filter(dependency_type='combination')
+            if not combo_deps.exists():
+                continue
+            
+            # If all the sources (condition resources) are in selected_ids, then the target_res MUST be in selected_ids
+            # Example: 101->Hall, 102->Hall. If selected_ids has 101 and 102, then Hall is required.
+            condition_resource_ids = {dep.resource.id for dep in combo_deps}
+            
+            if condition_resource_ids.issubset(selected_ids):
+                # All condition resources are met. Is the target selected?
+                if target_res.id not in selected_ids:
+                    from rest_framework.exceptions import ValidationError
+                    # Get the names of the condition resources to show in the error
+                    condition_names = [dep.resource.name for dep in combo_deps]
+                    raise ValidationError({'resources': f'{target_res.name} is required when {" and ".join(condition_names)} are booked together. Please add {target_res.name} to continue.'})
 
         all_available, details = _availability_for_resources(prop, [res.id for res in resources], start_dt, end_dt)
         if not all_available:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'availability': details})
 
-        pricing = _calculate_booking_price(resources, start_dt, end_dt, serializer.validated_data.get('extra_charges', 0))
+        pricing = _calculate_booking_price(resources, start_dt, end_dt, serializer.validated_data.get('extra_charges', 0), prop.tax_percentage, prop.security_deposit)
         
         payment_ref = serializer.validated_data.get('payment_reference')
         payment_screen = serializer.validated_data.get('payment_screenshot')
@@ -5498,7 +7048,7 @@ class VenueBookingViewSet(viewsets.ModelViewSet):
             raise ValidationError({'availability': details})
 
         extra_charges = serializer.validated_data.get('extra_charges', instance.extra_charges)
-        pricing = _calculate_booking_price(resources, start_dt, end_dt, extra_charges)
+        pricing = _calculate_booking_price(resources, start_dt, end_dt, extra_charges, prop.tax_percentage, prop.security_deposit)
         
         serializer.save(
             base_amount=pricing['subtotal'],
@@ -5795,3 +7345,1940 @@ class ResourceLockViewSet(viewsets.ModelViewSet):
         )
         serializer = self.get_serializer(lock)
         return Response(serializer.data, status=201)
+
+
+class ApplicationActionViewSet(viewsets.ModelViewSet):
+    queryset = ApplicationAction.objects.all()
+    serializer_class = ApplicationActionSerializer
+    permission_classes = [permissions.AllowAny]
+
+class ModuleActionViewSet(viewsets.ModelViewSet):
+    queryset = ModuleAction.objects.all()
+    serializer_class = ModuleActionSerializer
+    permission_classes = [permissions.AllowAny]
+
+class ApplicationModuleAuditLogViewSet(viewsets.ModelViewSet):
+    queryset = ApplicationModuleAuditLog.objects.all()
+    serializer_class = ApplicationModuleAuditLogSerializer
+    permission_classes = [permissions.AllowAny]
+
+class ApplicationModuleViewSet(viewsets.ModelViewSet):
+    serializer_class = ApplicationModuleSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = ApplicationModule.objects.filter(deleted_at__isnull=True)
+        category = self.request.query_params.get('category')
+        is_active = self.request.query_params.get('is_active')
+        is_sidebar = self.request.query_params.get('is_sidebar_module')
+        is_archived = self.request.query_params.get('is_archived')
+        
+        if category:
+            qs = qs.filter(category=category)
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+        if is_sidebar is not None:
+            qs = qs.filter(is_sidebar_module=is_sidebar.lower() == 'true')
+        if is_archived is not None:
+            qs = qs.filter(is_archived=is_archived.lower() == 'true')
+        else:
+            qs = qs.filter(is_archived=False)
+            
+        return qs.order_by('sort_order')
+
+    @action(detail=False, methods=['get'], url_path='sidebar')
+    def sidebar_modules(self, request):
+        from django.core.cache import cache
+        user = request.user
+        cache_key = f"sidebar_modules_{user.id}" if user.is_authenticated else "sidebar_modules_anon"
+        sidebar = cache.get(cache_key)
+        if not sidebar:
+            qs = ApplicationModule.objects.filter(
+                deleted_at__isnull=True,
+                is_active=True,
+                is_sidebar_module=True,
+                is_archived=False
+            ).order_by('sort_order')
+            
+            # Return all active modules to show locked ones dynamically with lock badge
+            filtered_qs = list(qs)
+                
+            serializer = self.get_serializer(filtered_qs, many=True, context={'request': request})
+            sidebar = serializer.data
+            cache.set(cache_key, sidebar, timeout=3600)
+        return Response(sidebar)
+
+    @action(detail=False, methods=['get'], url_path='subscription')
+    def subscription_modules(self, request):
+        qs = ApplicationModule.objects.filter(
+            deleted_at__isnull=True,
+            is_active=True,
+            supports_subscription=True,
+            is_archived=False
+        ).order_by('sort_order')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='permission')
+    def permission_modules(self, request):
+        qs = ApplicationModule.objects.filter(
+            deleted_at__isnull=True,
+            is_active=True,
+            supports_permissions=True,
+            is_archived=False
+        ).order_by('sort_order')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='usage')
+    def usage_modules(self, request):
+        qs = ApplicationModule.objects.filter(
+            deleted_at__isnull=True,
+            is_active=True,
+            supports_usage_counter=True,
+            is_archived=False
+        ).order_by('sort_order')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='analytics')
+    def analytics_modules(self, request):
+        qs = ApplicationModule.objects.filter(
+            deleted_at__isnull=True,
+            is_active=True,
+            supports_analytics=True,
+            is_archived=False
+        ).order_by('sort_order')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='activate')
+    def activate_module(self, request, pk=None):
+        module = self.get_object()
+        old_val = module.is_active
+        module.is_active = True
+        module.save()
+        
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        user = request.user if request.user.is_authenticated else None
+        ApplicationModuleAuditLog.objects.create(
+            module_code=module.module_code,
+            field_name='is_active',
+            old_value=str(old_val),
+            new_value='True',
+            changed_by=user
+        )
+        return Response({'status': 'activated'})
+
+    @action(detail=True, methods=['post'], url_path='deactivate')
+    def deactivate_module(self, request, pk=None):
+        module = self.get_object()
+        if module.is_system:
+            return Response({'error': 'Cannot deactivate system modules'}, status=400)
+        old_val = module.is_active
+        module.is_active = False
+        module.save()
+        
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        user = request.user if request.user.is_authenticated else None
+        ApplicationModuleAuditLog.objects.create(
+            module_code=module.module_code,
+            field_name='is_active',
+            old_value=str(old_val),
+            new_value='False',
+            changed_by=user
+        )
+        return Response({'status': 'deactivated'})
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive_module(self, request, pk=None):
+        module = self.get_object()
+        if module.is_system:
+            return Response({'error': 'Cannot archive system modules'}, status=400)
+        old_val = module.is_archived
+        module.is_archived = True
+        module.is_active = False
+        module.save()
+        
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        user = request.user if request.user.is_authenticated else None
+        ApplicationModuleAuditLog.objects.create(
+            module_code=module.module_code,
+            field_name='is_archived',
+            old_value=str(old_val),
+            new_value='True',
+            changed_by=user
+        )
+        return Response({'status': 'archived'})
+
+    @action(detail=True, methods=['post'], url_path='clone')
+    def clone_module(self, request, pk=None):
+        module = self.get_object()
+        
+        from django.db.models import Max
+        max_sort = ApplicationModule.objects.filter(deleted_at__isnull=True).aggregate(Max('sort_order'))['sort_order__max'] or 0
+        
+        cloned = ApplicationModule.objects.create(
+            module_code=f"{module.module_code}_clone_{random.randint(100, 999)}",
+            display_name=f"{module.display_name} (Copy)",
+            description=module.description,
+            category=module.category,
+            icon=module.icon,
+            route=f"{module.route}-copy-{random.randint(100, 999)}" if module.route else None,
+            parent_module=module.parent_module,
+            sort_order=max_sort + 1,
+            is_sidebar_module=module.is_sidebar_module,
+            is_visible=module.is_visible,
+            is_active=True,
+            is_system=False,
+            supports_subscription=module.supports_subscription,
+            supports_permissions=module.supports_permissions,
+            supports_usage_counter=module.supports_usage_counter,
+            supports_analytics=module.supports_analytics,
+            supports_audit_logs=module.supports_audit_logs,
+            supports_notifications=module.supports_notifications,
+            supports_export=module.supports_export,
+            supports_import=module.supports_import,
+            supports_search=module.supports_search,
+            supports_api=module.supports_api,
+            supports_mobile=module.supports_mobile,
+            supports_dashboard_widgets=module.supports_dashboard_widgets,
+            supports_reports=module.supports_reports,
+            supports_approval_workflow=module.supports_approval_workflow
+        )
+        
+        for ma in module.module_actions.all():
+            ModuleAction.objects.create(module=cloned, action=ma.action, is_custom=ma.is_custom, description=ma.description)
+            
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        serializer = self.get_serializer(cloned)
+        return Response(serializer.data, status=201)
+
+    @action(detail=False, methods=['post'], url_path='bulk-activate')
+    def bulk_activate(self, request):
+        ids = request.data.get('ids', [])
+        modules = ApplicationModule.objects.filter(pk__in=ids, deleted_at__isnull=True)
+        for m in modules:
+            m.is_active = True
+            m.save()
+            
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        return Response({'status': 'bulk activated'})
+
+    @action(detail=False, methods=['post'], url_path='bulk-deactivate')
+    def bulk_deactivate(self, request):
+        ids = request.data.get('ids', [])
+        modules = ApplicationModule.objects.filter(pk__in=ids, deleted_at__isnull=True, is_system=False)
+        for m in modules:
+            m.is_active = False
+            m.save()
+            
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        return Response({'status': 'bulk deactivated'})
+
+    @action(detail=False, methods=['post'], url_path='bulk-update')
+    def bulk_update(self, request):
+        updates = request.data.get('updates', [])
+        from django.core.cache import cache
+        for up in updates:
+            try:
+                module = ApplicationModule.objects.get(pk=up.get('id'), deleted_at__isnull=True)
+                field = up.get('field')
+                val = up.get('value')
+                if module.is_system and field in ('is_active', 'is_archived', 'deleted_at') and not val:
+                    continue
+                if hasattr(module, field):
+                    setattr(module, field, val)
+                    module.save()
+            except ApplicationModule.DoesNotExist:
+                continue
+        cache.delete('sidebar_modules')
+        return Response({'status': 'bulk updated'})
+
+    @action(detail=False, methods=['post'], url_path='scan')
+    def scan_and_discover(self, request):
+        created_count = 0
+        
+        ACTIONS = ["VIEW", "CREATE", "EDIT", "DELETE", "IMPORT", "EXPORT", "APPROVE", "REJECT", "ASSIGN", "DOWNLOAD", "UPLOAD", "ARCHIVE", "RESTORE", "MANAGE"]
+        for act_name in ACTIONS:
+            ApplicationAction.objects.get_or_create(name=act_name)
+            
+        default_actions = ApplicationAction.objects.filter(name__in=["VIEW", "CREATE", "EDIT", "DELETE"])
+        
+        DEFAULT_MODULES = [
+            {
+                "module_code": "dashboard",
+                "display_name": "Dashboard",
+                "category": "Core",
+                "icon": "LayoutDashboard",
+                "route": "/dashboard",
+                "is_sidebar_module": True,
+                "supports_analytics": True,
+                "is_system": True
+            },
+            {
+                "module_code": "members",
+                "display_name": "Members",
+                "category": "Community",
+                "icon": "Users",
+                "route": "/dashboard/directory",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "family",
+                "display_name": "Family",
+                "category": "Community",
+                "icon": "UsersRound",
+                "route": "/dashboard/family",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "committee",
+                "display_name": "Committee",
+                "category": "Community",
+                "icon": "UserCog",
+                "route": "/dashboard/committee",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "hierarchy",
+                "display_name": "Hierarchy",
+                "category": "Community",
+                "icon": "Network",
+                "route": "/dashboard/hierarchy",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "events",
+                "display_name": "Events",
+                "category": "Events",
+                "icon": "Calendar",
+                "route": "/dashboard/events",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "jobs",
+                "display_name": "Jobs",
+                "category": "Directory",
+                "icon": "Briefcase",
+                "route": "/dashboard/jobs",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "business",
+                "display_name": "Business Directory",
+                "category": "Directory",
+                "icon": "Building2",
+                "route": "/dashboard/business",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "donations",
+                "display_name": "Donations",
+                "category": "Finance",
+                "icon": "HandHeart",
+                "route": "/dashboard/donations",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True,
+                "supports_analytics": True
+            },
+            {
+                "module_code": "venues",
+                "display_name": "Venues",
+                "category": "Property",
+                "icon": "MapPin",
+                "route": "/dashboard/venues",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "gallery",
+                "display_name": "Gallery",
+                "category": "Gallery",
+                "icon": "Image",
+                "route": "/community-admin/gallery",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "matrimony",
+                "display_name": "Matrimony",
+                "category": "Matrimony",
+                "icon": "Heart",
+                "route": "/dashboard/matrimony",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "messages",
+                "display_name": "Messages",
+                "category": "Communication",
+                "icon": "MessageSquare",
+                "route": "/dashboard/messages",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "notifications",
+                "display_name": "Notifications",
+                "category": "Communication",
+                "icon": "Bell",
+                "route": "/dashboard/notifications",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True
+            },
+            {
+                "module_code": "settings",
+                "display_name": "Settings",
+                "category": "Administration",
+                "icon": "Settings",
+                "route": "/dashboard/settings",
+                "is_sidebar_module": True,
+                "is_system": True
+            },
+            {
+                "module_code": "plans",
+                "display_name": "Plans",
+                "category": "Subscription",
+                "icon": "CreditCard",
+                "route": "/community-admin/plan",
+                "is_sidebar_module": True,
+                "is_system": True
+            },
+            {
+                "module_code": "subscriptions",
+                "display_name": "Subscription",
+                "category": "Subscription",
+                "icon": "CreditCard",
+                "route": "/admin/subscriptions",
+                "is_sidebar_module": True,
+                "is_system": True
+            },
+            {
+                "module_code": "attendance",
+                "display_name": "Attendance",
+                "category": "Attendance",
+                "icon": "CalendarCheck",
+                "route": "/dashboard/attendance",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            },
+            {
+                "module_code": "properties",
+                "display_name": "Property Booking",
+                "category": "Property",
+                "icon": "MapPin",
+                "route": "/dashboard/properties",
+                "is_sidebar_module": True,
+                "supports_subscription": True,
+                "supports_permissions": True,
+                "supports_usage_counter": True
+            }
+        ]
+
+        for df in DEFAULT_MODULES:
+            module, created = ApplicationModule.objects.get_or_create(
+                module_code=df["module_code"],
+                defaults={
+                    "display_name": df["display_name"],
+                    "category": df["category"],
+                    "icon": df["icon"],
+                    "route": df.get("route"),
+                    "sort_order": DEFAULT_MODULES.index(df) + 1,
+                    "is_sidebar_module": df.get("is_sidebar_module", False),
+                    "is_system": df.get("is_system", False),
+                    "supports_subscription": df.get("supports_subscription", False),
+                    "supports_permissions": df.get("supports_permissions", False),
+                    "supports_usage_counter": df.get("supports_usage_counter", False),
+                    "supports_analytics": df.get("supports_analytics", False)
+                }
+            )
+            if created:
+                created_count += 1
+                for action in default_actions:
+                    ModuleAction.objects.get_or_create(module=module, action=action)
+        
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        routes_dir = os.path.join(base_dir, 'src', 'routes')
+        discovered = set()
+        
+        if os.path.exists(routes_dir):
+            import re
+            for filename in os.listdir(routes_dir):
+                if filename.endswith('.tsx'):
+                    match = re.match(r'^(admin|community-admin|dashboard)\.([^.]+)\.tsx$', filename)
+                    if match:
+                        code = match.group(2)
+                        if code not in ('index', 'tsx', 'venues', 'communities', 'members', 'committee', 'events', 'jobs', 'donations', 'matrimony', 'settings', 'reports', 'roles', 'subscriptions'):
+                            discovered.add(code)
+                            
+        existing_routes = set(ApplicationModule.objects.filter(deleted_at__isnull=True).values_list('route', flat=True))
+        existing_routes.discard(None)
+        
+        for code in discovered:
+            if not ApplicationModule.objects.filter(module_code=code, deleted_at__isnull=True).exists():
+                route = f"/dashboard/{code}"
+                if route in existing_routes:
+                    route = f"/dashboard/custom-{code}"
+                    if route in existing_routes:
+                        continue
+                
+                from django.db.models import Max
+                max_sort = ApplicationModule.objects.filter(deleted_at__isnull=True).aggregate(Max('sort_order'))['sort_order__max'] or 0
+                module = ApplicationModule.objects.create(
+                    module_code=code,
+                    display_name=code.replace('-', ' ').title(),
+                    category="Custom",
+                    icon="Box",
+                    route=route,
+                    sort_order=max_sort + 1,
+                    is_sidebar_module=True,
+                    is_active=True,
+                    supports_subscription=True,
+                    supports_permissions=True,
+                    supports_usage_counter=True
+                )
+                existing_routes.add(route)
+                created_count += 1
+                for action in default_actions:
+                    ModuleAction.objects.get_or_create(module=module, action=action)
+                    
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        return Response({'status': 'scan completed', 'created_modules': created_count})
+
+    def destroy(self, request, *args, **kwargs):
+        module = self.get_object()
+        if module.is_system:
+            return Response({'error': 'Cannot delete system modules'}, status=400)
+        
+        import datetime
+        module.deleted_at = datetime.datetime.now()
+        module.is_active = False
+        module.save()
+        
+        FeatureMaster.objects.filter(code=module.module_code).update(active=False)
+        
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        return Response({'status': 'deleted'}, status=204)
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        
+        ACTIONS = ["VIEW", "CREATE", "EDIT", "DELETE"]
+        default_actions = ApplicationAction.objects.filter(name__in=ACTIONS)
+        for act in default_actions:
+            ModuleAction.objects.get_or_create(module=instance, action=act)
+            
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        old_data = {field: getattr(instance, field) for field in serializer.validated_data}
+        updated_instance = serializer.save()
+        
+        from django.core.cache import cache
+        cache.delete('sidebar_modules')
+        
+        user = self.request.user if self.request.user.is_authenticated else None
+        for field, new_val in serializer.validated_data.items():
+            old_val = old_data.get(field)
+            if old_val != new_val:
+                ApplicationModuleAuditLog.objects.create(
+                    module_code=updated_instance.module_code,
+                    field_name=field,
+                    old_value=str(old_val),
+                    new_value=str(new_val),
+                    changed_by=user
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2: MEMBER PREMIUM SUBSCRIPTION VIEWSETS
+# ─────────────────────────────────────────────────────────────────────────────
+from .models import (
+    PremiumFeatureRegistry,
+    MemberPremiumPlan, MemberPremiumFeature, MemberPremiumBenefit,
+    MemberPremiumAddon, MemberPremiumCoupon, MemberPremiumSubscription,
+    MemberFeatureUsage, MemberPremiumTransaction, MemberPremiumInvoice,
+    MemberAddonPurchase, MemberPremiumAuditLog,
+    CommunityLicense, CommunityModuleAccess, CommunityUsage, CommunityBilling,
+    CommunityInvoice, CommunityTransaction, CommunityAddon, CommunityAuditLog,
+    MemberPremiumReward, MemberPremiumSupportTicket
+)
+from .serializers import (
+    PremiumFeatureRegistrySerializer,
+    MemberPremiumPlanSerializer, MemberPremiumFeatureSerializer, MemberPremiumBenefitSerializer,
+    MemberPremiumAddonSerializer, MemberPremiumCouponSerializer,
+    MemberPremiumSubscriptionSerializer, MemberFeatureUsageSerializer,
+    MemberPremiumTransactionSerializer, MemberPremiumInvoiceSerializer,
+    MemberAddonPurchaseSerializer, MemberPremiumAuditLogSerializer,
+    CommunityLicenseSerializer, CommunityModuleAccessSerializer, CommunityUsageSerializer,
+    CommunityBillingSerializer, CommunityInvoiceSerializer, CommunityTransactionSerializer,
+    CommunityAddonSerializer, CommunityAuditLogSerializer,
+    MemberPremiumRewardSerializer, MemberPremiumSupportTicketSerializer
+)
+
+DEFAULT_REGISTRY_FEATURES = [
+    # Matrimony
+    ("matrimony", "Matrimony Access", "MATRIMONY_ACCESS", "Access to premium matrimony and matchmaking features", "matrimony", "heart"),
+
+    # Committee
+    ("committee", "Committee Access", "COMMITTEE_ACCESS", "Access to community committee board and decisions", "committee", "users"),
+
+    # Events
+    ("events", "Events Access", "EVENTS_ACCESS", "Access to community events and registrations", "events", "calendar"),
+
+    # Donations
+    ("donations", "Donations Access", "DONATIONS_ACCESS", "Access to participate in campaigns and donations", "donations", "hand-heart"),
+
+    # Venues
+    ("venues", "Venues Access", "VENUES_ACCESS", "Access to view community halls, grounds, and venues", "venues", "map-pin"),
+
+    # Messaging (Messages)
+    ("messaging", "Messages Access", "MESSAGES_ACCESS", "Access to direct chat messaging and discussions", "messaging", "message-square"),
+
+    # Attendance
+    ("attendance", "Attendance Access", "ATTENDANCE_ACCESS", "Access to mark and track attendance", "attendance", "calendar-check"),
+
+    # Property Booking
+    ("property", "Property Booking Access", "PROPERTY_BOOKING_ACCESS", "Access to reserve properties and community halls", "property", "box"),
+
+    # Subsidiaries
+    ("subsidiaries", "Subsidiaries Access", "SUBSIDIARIES_ACCESS", "Access to view and connect with subsidiary boards", "subsidiaries", "building-2"),
+
+    # Advertisements
+    ("ads", "Advertisements Access", "ADVERTISEMENTS_ACCESS", "Access to publish and manage advertisements", "ads", "megaphone"),
+]
+
+
+class PremiumFeatureRegistryViewSet(viewsets.ModelViewSet):
+    queryset = PremiumFeatureRegistry.objects.all()
+    serializer_class = PremiumFeatureRegistrySerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        # Auto seed missing default features
+        for module, name, code, desc, cat, icon in DEFAULT_REGISTRY_FEATURES:
+            PremiumFeatureRegistry.objects.get_or_create(
+                feature_code=code,
+                defaults={
+                    'module': module,
+                    'feature_name': name,
+                    'description': desc,
+                    'category': cat,
+                    'icon': icon,
+                    'status': 'active'
+                }
+            )
+        # Delete registry entries that are no longer in DEFAULT_REGISTRY_FEATURES
+        valid_codes = [f[2] for f in DEFAULT_REGISTRY_FEATURES]
+        PremiumFeatureRegistry.objects.exclude(feature_code__in=valid_codes).delete()
+        return PremiumFeatureRegistry.objects.all()
+
+
+class MemberPremiumPlanViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumPlan.objects.filter(is_archived=False).order_by('display_order', 'id')
+    serializer_class = MemberPremiumPlanSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def destroy(self, request, *args, **kwargs):
+        plan = self.get_object()
+        # Soft delete the plan instead of hard delete to prevent re-seeding of free/standard plans
+        plan.is_archived = True
+        if plan.code and plan.code not in ['free', 'silver', 'gold']:
+            import time
+            plan.code = f"{plan.code}_deleted_{int(time.time())}"
+        plan.save()
+        
+        # Find all active subscriptions for this plan to create audit log records
+        active_subs = MemberPremiumSubscription.objects.filter(plan=plan)
+        user = request.user if request.user.is_authenticated else None
+        
+        for sub in active_subs:
+            MemberPremiumAuditLog.objects.create(
+                action='subscription_cancelled',
+                member=sub.member,
+                subscription=sub,
+                plan=plan,
+                description=f"Subscription deactivated due to plan '{plan.name}' being deleted by administrator.",
+                performed_by=user
+            )
+            
+        # Set referencing member subscriptions to None and status to inactive so they are unsubscribed
+        active_subs.update(plan=None, status='inactive')
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+    @action(detail=True, methods=['post'], url_path='clone')
+    def clone_plan(self, request, pk=None):
+        plan = self.get_object()
+        import time
+        new_code = f"{plan.code}_clone_{int(time.time())}"
+        new_plan = MemberPremiumPlan.objects.create(
+            name=f"{plan.name} (Copy)",
+            code=new_code,
+            plan_type=plan.plan_type,
+            short_description=plan.short_description,
+            description=plan.description,
+            color_theme=plan.color_theme,
+            icon=plan.icon,
+            monthly_price=plan.monthly_price,
+            quarterly_price=plan.quarterly_price,
+            half_yearly_price=plan.half_yearly_price,
+            yearly_price=plan.yearly_price,
+            lifetime_price=plan.lifetime_price,
+            currency=plan.currency,
+            gst_percentage=plan.gst_percentage,
+            discount_percentage=plan.discount_percentage,
+            trial_days=plan.trial_days,
+            grace_period_days=plan.grace_period_days,
+            status='inactive',
+            display_order=plan.display_order + 1,
+            metadata=plan.metadata,
+        )
+        # Clone features
+        for feat in plan.features.all():
+            MemberPremiumFeature.objects.create(
+                plan=new_plan,
+                feature_code=feat.feature_code,
+                name=feat.name,
+                description=feat.description,
+                category=feat.category,
+                icon=feat.icon,
+                is_enabled=feat.is_enabled,
+                is_unlimited=feat.is_unlimited,
+                limit_type=feat.limit_type,
+                limit_value=feat.limit_value,
+                priority=feat.priority,
+                upgrade_message=feat.upgrade_message,
+            )
+        # Clone benefits
+        for ben in plan.benefits.all():
+            MemberPremiumBenefit.objects.create(
+                plan=new_plan,
+                title=ben.title,
+                description=ben.description,
+                icon=ben.icon,
+                is_highlight=ben.is_highlight,
+                display_order=ben.display_order,
+                is_included=ben.is_included,
+            )
+        serializer = MemberPremiumPlanSerializer(new_plan)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive_plan(self, request, pk=None):
+        plan = self.get_object()
+        plan.is_archived = True
+        plan.status = 'archived'
+        plan.save()
+        return Response({"detail": "Plan archived successfully."})
+
+    @action(detail=False, methods=['get'], url_path='analytics')
+    def analytics(self, request):
+        from django.db.models import Sum, Count
+        total_premium = MemberPremiumSubscription.objects.filter(status='active').count()
+        total_trial = MemberPremiumSubscription.objects.filter(status='trial').count()
+        total_expired = MemberPremiumSubscription.objects.filter(status='expired').count()
+        total_cancelled = MemberPremiumSubscription.objects.filter(status='cancelled').count()
+        monthly_revenue = MemberPremiumTransaction.objects.filter(
+            transaction_status='success',
+            transaction_type__in=['purchase', 'renewal', 'upgrade']
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+
+        plan_distribution = []
+        for plan in MemberPremiumPlan.objects.all():
+            count = MemberPremiumSubscription.objects.filter(plan=plan, status='active').count()
+            plan_distribution.append({
+                'plan': plan.name,
+                'code': plan.code,
+                'color': plan.color_theme,
+                'count': count,
+            })
+
+        return Response({
+            'total_premium_members': total_premium,
+            'total_trial': total_trial,
+            'total_expired': total_expired,
+            'total_cancelled': total_cancelled,
+            'monthly_revenue': float(monthly_revenue),
+            'plan_distribution': plan_distribution,
+        })
+
+
+class MemberPremiumFeatureViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumFeature.objects.all()
+    serializer_class = MemberPremiumFeatureSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        plan_id = self.request.query_params.get('plan')
+        if plan_id:
+            qs = qs.filter(plan_id=plan_id)
+        return qs
+
+
+class MemberPremiumBenefitViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumBenefit.objects.all()
+    serializer_class = MemberPremiumBenefitSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        plan_id = self.request.query_params.get('plan')
+        if plan_id:
+            qs = qs.filter(plan_id=plan_id)
+        return qs
+
+
+class MemberPremiumAddonViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumAddon.objects.all()
+    serializer_class = MemberPremiumAddonSerializer
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=True, methods=['post'], url_path='purchase')
+    def purchase(self, request, pk=None):
+        addon = self.get_object()
+        quantity = int(request.data.get('quantity', 1))
+        
+        user = request.user
+        if not user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=401)
+        try:
+            member = user.member_profile
+        except Exception:
+            return Response({"detail": "Member profile not found"}, status=400)
+            
+        sub = MemberPremiumSubscription.objects.filter(member=member).order_by('-created_at').first()
+        if not sub:
+            free_plan, _ = MemberPremiumPlan.objects.get_or_create(
+                code='free',
+                defaults={
+                    'name': 'Free Membership',
+                    'plan_type': 'free',
+                    'monthly_price': 0,
+                    'yearly_price': 0,
+                    'status': 'active',
+                    'short_description': 'Basic free plan.'
+                }
+            )
+            from django.utils import timezone
+            sub = MemberPremiumSubscription.objects.create(
+                member=member,
+                plan=free_plan,
+                status='active',
+                billing_cycle='lifetime',
+                start_date=timezone.now()
+            )
+            
+        price = Decimal(str(addon.price)) * quantity
+        gst_amount = price * Decimal('0.18')
+        total_amount = price + gst_amount
+        
+        purchase = MemberAddonPurchase.objects.create(
+            member=member,
+            addon=addon,
+            quantity=quantity,
+            amount_paid=total_amount,
+            status='active'
+        )
+        
+        import random
+        txn = MemberPremiumTransaction.objects.create(
+            subscription=sub,
+            transaction_type='addon',
+            transaction_status='success',
+            amount=price,
+            gst_amount=gst_amount,
+            total_amount=total_amount,
+            payment_method=request.data.get('payment_method', 'Razorpay'),
+            transaction_ref=f"TXN-ADD-{random.randint(100000, 999999)}",
+            plan=sub.plan,
+            notes=f"Purchased addon: {addon.name} x {quantity}"
+        )
+        
+        import time
+        import random
+        random_suffix = random.randint(1000, 9999)
+        invoice_no = f"INV-ADD-{int(time.time())}-{random_suffix}"
+        MemberPremiumInvoice.objects.create(
+            transaction=txn,
+            invoice_no=invoice_no,
+            gst_invoice_no=f"GST-ADD-{int(time.time())}-{random_suffix}",
+            subtotal=price,
+            gst_percentage=18,
+            gst_amount=gst_amount,
+            total=total_amount,
+            paid=True,
+            notes=f"Purchase of addon {addon.name}."
+        )
+        
+        MemberPremiumAuditLog.objects.create(
+            action='addon_purchased',
+            member=member,
+            subscription=sub,
+            plan=sub.plan,
+            description=f"Purchased addon: {addon.name} (Qty: {quantity})",
+            performed_by=user,
+        )
+        return Response(MemberAddonPurchaseSerializer(purchase).data)
+
+
+class MemberPremiumCouponViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumCoupon.objects.all().order_by('-created_at')
+    serializer_class = MemberPremiumCouponSerializer
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['post'], url_path='validate')
+    def validate_coupon(self, request):
+        code = request.data.get('code', '').strip().upper()
+        plan_id = request.data.get('plan_id')
+        amount = float(request.data.get('amount', 0))
+        try:
+            coupon = MemberPremiumCoupon.objects.get(code=code, is_active=True)
+        except MemberPremiumCoupon.DoesNotExist:
+            return Response({"valid": False, "error": "Invalid or inactive coupon code."}, status=400)
+
+        from django.utils import timezone
+        if coupon.expiry_date and coupon.expiry_date < timezone.now():
+            return Response({"valid": False, "error": "This coupon has expired."}, status=400)
+        if coupon.usage_limit is not None and coupon.used_count >= coupon.usage_limit:
+            return Response({"valid": False, "error": "This coupon has reached its usage limit."}, status=400)
+        if amount < float(coupon.minimum_amount):
+            return Response({"valid": False, "error": f"Minimum order amount is ₹{coupon.minimum_amount}."}, status=400)
+
+        discount = 0
+        if coupon.coupon_type == 'percentage':
+            discount = (amount * float(coupon.discount_value)) / 100
+            if coupon.max_discount_amount:
+                discount = min(discount, float(coupon.max_discount_amount))
+        elif coupon.coupon_type == 'flat':
+            discount = float(coupon.discount_value)
+
+        return Response({
+            "valid": True,
+            "coupon": MemberPremiumCouponSerializer(coupon).data,
+            "discount_amount": round(discount, 2),
+            "final_amount": round(amount - discount, 2),
+        })
+
+
+def ensure_features_for_member_plan(plan):
+    if not plan:
+        return
+        
+    from api.models import MemberPremiumFeature, MemberPremiumBenefit
+    
+    # Check if the plan contains any old features or features are empty but benefits exist
+    has_old_features = plan.features.filter(
+        feature_code__in=[
+            'UNLIMITED_CHAT', 'MATRIMONY_INTERESTS', 'MATRIMONY_UNLIMITED_VIEWS', 
+            'BUSINESS_PROMOTIONS', 'JOBS_UNLIMITED_APPLY', 'EVENTS_UNLIMITED', 
+            'AI_CREDITS', 'STORAGE_GB', 'VENUE_BOOKING_ENABLED', 'DONATIONS_ENABLED', 
+            'BUSINESS_ADS'
+        ]
+    ).exists() or plan.features.filter(feature_code__startswith='MSG_').exists()
+    
+    if has_old_features or (not plan.features.exists() and plan.benefits.exists()):
+        plan.features.all().delete()
+        plan.benefits.all().delete()
+        
+    # Auto-repair logic: if a non-free plan has features but none of them are enabled,
+    # it is in a corrupted state (due to frontend serialization bugs), so we reset the features.
+    if plan.plan_type != 'free' and plan.features.exists() and not plan.features.filter(is_enabled=True).exists():
+        plan.features.all().delete()
+        
+    features = [
+        ("MATRIMONY_ACCESS", "Matrimony Access", "Access to premium matrimony search and matchmaking", "matrimony"),
+        ("COMMITTEE_ACCESS", "Committee Access", "Access to community committee board and decisions", "committee"),
+        ("EVENTS_ACCESS", "Events Access", "Access to premium events registration and updates", "events"),
+        ("DONATIONS_ACCESS", "Donations Access", "Access to contribute to donation campaigns", "donations"),
+        ("VENUES_ACCESS", "Venues Access", "Access to book and view community venues", "venues"),
+        ("MESSAGES_ACCESS", "Messages Access", "Access to direct and group messaging features", "messaging"),
+        ("ATTENDANCE_ACCESS", "Attendance Access", "Access to mark and view attendance logs", "attendance"),
+        ("PROPERTY_BOOKING_ACCESS", "Property Booking Access", "Access to request property bookings", "property"),
+        ("SUBSIDIARIES_ACCESS", "Subsidiaries Access", "Access to view subsidiary organizations", "subsidiaries"),
+        ("ADVERTISEMENTS_ACCESS", "Advertisements Access", "Access to request advertisement bookings", "ads"),
+    ]
+    
+    code_lower = (plan.code or "").lower()
+    has_features = plan.features.exists()
+    for code, name, desc, cat in features:
+        feature_exists = plan.features.filter(feature_code=code).exists()
+        if not feature_exists:
+            is_enabled = False
+            if not has_features:
+                if 'free' in code_lower:
+                    is_enabled = False
+                elif 'silver' in code_lower:
+                    # Silver has messaging, events, donations
+                    is_enabled = code in ['MESSAGES_ACCESS', 'EVENTS_ACCESS', 'DONATIONS_ACCESS']
+                elif 'gold' in code_lower:
+                    # Gold has messaging, events, donations, venues, matrimony, committee
+                    is_enabled = code in ['MESSAGES_ACCESS', 'EVENTS_ACCESS', 'DONATIONS_ACCESS', 'VENUES_ACCESS', 'MATRIMONY_ACCESS', 'COMMITTEE_ACCESS']
+                else:
+                    is_enabled = True
+            else:
+                is_enabled = False
+
+                
+            MemberPremiumFeature.objects.create(
+                plan=plan,
+                feature_code=code,
+                name=name,
+                description=desc,
+                category=cat,
+                limit_type='unlimited',
+                limit_value=0,
+                is_enabled=is_enabled,
+                upgrade_message=f"Upgrade your plan to unlock {name}."
+            )
+
+    benefits = [
+        ("Premium Matrimony Search", "Express interest without limit", "heart", True, 'MATRIMONY_ACCESS'),
+        ("Committee Board Access", "Access community decisions", "users", True, 'COMMITTEE_ACCESS'),
+        ("Priority Event Registrations", "Access premium events", "calendar", True, 'EVENTS_ACCESS'),
+        ("Donation Campaign Access", "Contribute to fundraisers", "hand-heart", True, 'DONATIONS_ACCESS'),
+        ("Venue Booking Privileges", "Rent community halls & grounds", "map-pin", True, 'VENUES_ACCESS'),
+        ("Unlimited Direct Messaging", "Connect with anyone instantly", "message-circle", True, 'MESSAGES_ACCESS'),
+        ("Attendance Tracking Tools", "Mark & view attendance logs", "calendar-check", True, 'ATTENDANCE_ACCESS'),
+        ("Property Booking Access", "Request bookings of properties", "box", True, 'PROPERTY_BOOKING_ACCESS'),
+        ("Subsidiaries Registry View", "Browse subsidiary boards", "building-2", True, 'SUBSIDIARIES_ACCESS'),
+        ("Business Ads Booking", "Manage and publish ads", "megaphone", True, 'ADVERTISEMENTS_ACCESS'),
+    ]
+    
+    for title, desc, icon, highlight, fcode in benefits:
+        feature_enabled = plan.features.filter(feature_code=fcode, is_enabled=True).exists()
+        benefit_obj, created = MemberPremiumBenefit.objects.get_or_create(
+            plan=plan,
+            title=title,
+            defaults={
+                'description': desc,
+                'icon': icon,
+                'is_highlight': highlight,
+                'is_included': feature_enabled
+            }
+        )
+        if not created and benefit_obj.is_included != feature_enabled:
+            benefit_obj.is_included = feature_enabled
+            benefit_obj.save()
+
+
+def check_member_feature_limit(member, feature_code, increment=False):
+    """
+    Checks if a member has access to a premium feature, and optionally increments usage.
+    Returns: (has_access, message_or_reason)
+    """
+    from api.models import MemberPremiumSubscription, MemberPremiumFeature, MemberFeatureUsage, MemberPremiumPlan
+    
+    # Map old/legacy feature codes to the new registry-driven features
+    feature_mapping = {
+        "UNLIMITED_CHAT": "MESSAGES_ACCESS",
+        "MATRIMONY_INTERESTS": "MATRIMONY_ACCESS",
+        "MATRIMONY_UNLIMITED_VIEWS": "MATRIMONY_ACCESS",
+        "EVENTS_UNLIMITED": "EVENTS_ACCESS",
+        "VENUE_BOOKING_ENABLED": "VENUES_ACCESS",
+        "DONATIONS_ENABLED": "DONATIONS_ACCESS",
+        "BUSINESS_ADS": "ADVERTISEMENTS_ACCESS",
+    }
+    
+    always_allowed = {"JOBS_UNLIMITED_APPLY", "BUSINESS_PROMOTIONS", "STORAGE_GB", "AI_CREDITS"}
+    if feature_code in always_allowed:
+        return True, "Success"
+        
+    mapped_code = feature_mapping.get(feature_code, feature_code)
+    
+    # 1. Get active premium subscription or fall back to free plan
+    sub = None
+    if member:
+        sub = MemberPremiumSubscription.objects.filter(member=member).order_by('-created_at').first()
+        
+    plan = None
+    if sub and sub.is_currently_active() and sub.plan:
+        plan = sub.plan
+    else:
+        # Check if a free plan subscription exists, otherwise create one
+        from django.utils import timezone
+        free_plan, _ = MemberPremiumPlan.objects.get_or_create(
+            code='free',
+            defaults={
+                'name': 'Free Membership',
+                'plan_type': 'free',
+                'monthly_price': 0,
+                'yearly_price': 0,
+                'status': 'active',
+                'short_description': 'Basic free plan.'
+            }
+        )
+        
+        # Ensure default features are seeded for the plan
+        ensure_features_for_member_plan(free_plan)
+        
+        if member:
+            sub, _ = MemberPremiumSubscription.objects.get_or_create(
+                member=member,
+                plan=free_plan,
+                defaults={
+                    'status': 'active',
+                    'billing_cycle': 'lifetime',
+                    'start_date': timezone.now()
+                }
+            )
+            plan = sub.plan
+        else:
+            plan = free_plan
+            
+    if not plan:
+        return True, "No active membership plan"
+        
+    # Ensure default features are seeded for the plan if they are missing
+    ensure_features_for_member_plan(plan)
+    
+    # 2. Retrieve feature using the mapped code
+    feature = MemberPremiumFeature.objects.filter(plan=plan, feature_code=mapped_code).first()
+    if not feature:
+        # Check if mapped_code is in the registry.
+        from api.models import PremiumFeatureRegistry
+        if PremiumFeatureRegistry.objects.filter(feature_code=mapped_code).exists():
+            return False, f"Feature not included in your current plan. Please upgrade."
+        return True, "Success"
+        
+    if not feature.is_enabled:
+        return False, feature.upgrade_message or f"Feature {feature.name} is disabled. Upgrade your plan."
+        
+    if feature.is_unlimited or feature.limit_type == 'unlimited':
+        return True, "Success"
+        
+    # Check limit value
+    if feature.limit_value > 0:
+        if not sub:
+            return True, "Success"
+        usage, _ = MemberFeatureUsage.objects.get_or_create(subscription=sub, feature_code=mapped_code)
+        if usage.used_count >= feature.limit_value:
+            return False, feature.upgrade_message or f"Usage limit reached ({usage.used_count}/{feature.limit_value}). Please upgrade your plan."
+        if increment:
+            usage.used_count += 1
+            usage.save()
+            
+    return True, "Success"
+
+
+class MemberPremiumSubscriptionViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumSubscription.objects.select_related('member', 'plan', 'coupon').order_by('-created_at')
+    serializer_class = MemberPremiumSubscriptionSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def _clear_sidebar_cache(self, user):
+        if user and user.is_authenticated:
+            from django.core.cache import cache
+            cache.delete(f"sidebar_modules_{user.id}")
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        if instance.member and instance.member.user:
+            self._clear_sidebar_cache(instance.member.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        if instance.member and instance.member.user:
+            self._clear_sidebar_cache(instance.member.user)
+
+    def perform_destroy(self, instance):
+        user = instance.member.user if (instance.member and instance.member.user) else None
+        instance.delete()
+        if user:
+            self._clear_sidebar_cache(user)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            try:
+                member = user.member_profile
+                qs = qs.filter(member=member)
+            except Exception:
+                return qs.none()
+        status_filter = self.request.query_params.get('status')
+        plan_id = self.request.query_params.get('plan')
+        member_id = self.request.query_params.get('member')
+        search = self.request.query_params.get('search', '').strip()
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        if plan_id:
+            qs = qs.filter(plan_id=plan_id)
+        if member_id:
+            qs = qs.filter(member_id=member_id)
+        if search:
+            qs = qs.filter(Q(member__name__icontains=search) | Q(member__email__icontains=search))
+        return qs
+
+    @action(detail=False, methods=['get'], url_path='my-membership')
+    def my_membership(self, request):
+        user = request.user
+        if not user.is_authenticated:
+            return Response({"detail": "Authentication required"}, status=401)
+        try:
+            member = user.member_profile
+        except Exception:
+            return Response({"detail": "Member profile not found"}, status=400)
+            
+        sub = MemberPremiumSubscription.objects.filter(member=member).order_by('-created_at').first()
+        if not sub:
+            free_plan, _ = MemberPremiumPlan.objects.get_or_create(
+                code='free',
+                defaults={
+                    'name': 'Free Membership',
+                    'plan_type': 'free',
+                    'monthly_price': 0,
+                    'yearly_price': 0,
+                    'status': 'active',
+                    'short_description': 'Basic free plan.'
+                }
+            )
+            from django.utils import timezone
+            sub = MemberPremiumSubscription.objects.create(
+                member=member,
+                plan=free_plan,
+                status='active',
+                billing_cycle='lifetime',
+                start_date=timezone.now()
+            )
+            
+        self._ensure_features_for_plan(sub.plan)
+        
+        data = MemberPremiumSubscriptionSerializer(sub, context={'request': request}).data
+        
+        days_remaining = 0
+        if sub.end_date:
+            from django.utils import timezone
+            delta = sub.end_date - timezone.now()
+            days_remaining = max(0, delta.days)
+            
+        data['days_remaining'] = days_remaining
+        data['verified_badge'] = getattr(member, 'is_verified', False) or (sub.plan and sub.plan.plan_type != 'free' and sub.plan.code != 'free')
+        
+        reward, _ = MemberPremiumReward.objects.get_or_create(member=member)
+        data['rewards'] = MemberPremiumRewardSerializer(reward).data
+        
+        tickets = MemberPremiumSupportTicket.objects.filter(member=member).order_by('-created_at')
+        data['tickets'] = MemberPremiumSupportTicketSerializer(tickets, many=True).data
+        
+        # Include list of all active plans for comparison
+        all_plans = MemberPremiumPlan.objects.filter(is_archived=False).order_by('display_order', 'id')
+        for p in all_plans:
+            self._ensure_features_for_plan(p)
+        data['all_plans'] = MemberPremiumPlanSerializer(all_plans, many=True, context={'request': request}).data
+        
+        # 1. Dynamic Features and Usages
+        from api.models import MemberPremiumFeature, MemberFeatureUsage
+        usages = []
+        features_list = MemberPremiumFeature.objects.filter(plan=sub.plan, is_enabled=True)
+        for f in features_list:
+            usage_obj = MemberFeatureUsage.objects.filter(subscription=sub, feature_code=f.feature_code).first()
+            used = usage_obj.used_count if usage_obj else 0
+            is_unlimited = f.is_unlimited or f.limit_type == 'unlimited'
+            limit_val = f.limit_value
+            
+            remaining = "Unlimited" if is_unlimited else max(0, limit_val - used)
+            percentage = 0 if is_unlimited else min(100, int((used / limit_val) * 100)) if limit_val > 0 else 0
+            
+            status = "Unlocked"
+            if not f.is_enabled:
+                status = "Locked"
+            elif not is_unlimited and used >= limit_val:
+                status = "Exceeded"
+            elif sub.status == 'expired':
+                status = "Expired"
+                
+            usages.append({
+                "feature_code": f.feature_code,
+                "name": f.name,
+                "description": f.description,
+                "category": f.category,
+                "icon": f.icon or "star",
+                "used_count": used,
+                "limit_value": limit_val,
+                "limit_type": f.limit_type,
+                "is_unlimited": is_unlimited,
+                "remaining": remaining,
+                "percentage": percentage,
+                "status": status
+            })
+        data['usages'] = usages
+
+        # 2. Timeline Events (Chronological Member Premium Audit Log)
+        from api.models import MemberPremiumAuditLog
+        logs = MemberPremiumAuditLog.objects.filter(member=member).order_by('-timestamp')[:20]
+        timeline = []
+        for log in logs:
+            timeline.append({
+                "id": log.id,
+                "action": log.action,
+                "description": log.description,
+                "created_at": log.timestamp,
+                "performed_by": log.performed_by.username if log.performed_by else 'System'
+            })
+        data['timeline'] = timeline
+
+        # 3. Invoices
+        from api.models import MemberPremiumInvoice
+        tx_ids = [t['id'] for t in data.get('transactions', [])]
+        invoices = MemberPremiumInvoice.objects.filter(transaction_id__in=tx_ids).order_by('-created_at')
+        from api.serializers import MemberPremiumInvoiceSerializer
+        data['invoices'] = MemberPremiumInvoiceSerializer(invoices, many=True).data
+
+        # 4. Addons
+        from api.models import MemberPremiumAddon
+        addons = MemberPremiumAddon.objects.filter(active=True)
+        from api.serializers import MemberPremiumAddonSerializer
+        data['addons'] = MemberPremiumAddonSerializer(addons, many=True).data
+
+        # 5. Coupons
+        from api.models import MemberPremiumCoupon
+        coupons = MemberPremiumCoupon.objects.filter(is_active=True)
+        from api.serializers import MemberPremiumCouponSerializer
+        data['coupons'] = MemberPremiumCouponSerializer(coupons, many=True).data
+
+        # 6. Support Details based on Plan
+        plan = sub.plan
+        plan_code = plan.code if plan else 'free'
+        support_email = plan.metadata.get('support_email') if plan and plan.metadata else None
+        if not support_email and plan:
+            if plan.plan_type == 'free' or plan.code == 'free':
+                support_email = "support@waghub.com"
+            else:
+                support_email = f"{plan.code}-support@waghub.com"
+
+        if plan and plan.metadata and 'support_details' in plan.metadata:
+            support_info = plan.metadata['support_details']
+        else:
+            if plan and (plan.plan_type in ['platinum', 'diamond', 'lifetime'] or plan.monthly_price >= 200):
+                support_info = {
+                    "priority": "Urgent (within 2 hours)",
+                    "type": "Dedicated Account Specialist",
+                    "hours": "24/7 Live Chat & Phone Support",
+                    "email": support_email or "platinum-support@waghub.com",
+                    "chat_enabled": True,
+                    "phone_enabled": True
+                }
+            elif plan and (plan.plan_type in ['gold', 'silver'] or plan.monthly_price >= 100):
+                support_info = {
+                    "priority": "High (within 6 hours)",
+                    "type": "Priority Helpdesk Agent",
+                    "hours": "9 AM - 9 PM IST Daily",
+                    "email": support_email or "gold-support@waghub.com",
+                    "chat_enabled": True,
+                    "phone_enabled": False
+                }
+            else:
+                support_info = {
+                    "priority": "Standard (24-48 hours)",
+                    "type": "Community Support Desk",
+                    "hours": "9 AM - 5 PM IST (Mon-Fri)",
+                    "email": support_email or "support@waghub.com",
+                    "chat_enabled": False,
+                    "phone_enabled": False
+                }
+        data['support_details'] = support_info
+
+        return Response(data)
+
+    def _ensure_features_for_plan(self, plan):
+        ensure_features_for_member_plan(plan)
+
+    @action(detail=True, methods=['post'], url_path='renew')
+    def renew(self, request, pk=None):
+        sub = self.get_object()
+        billing_cycle = request.data.get('billing_cycle', sub.billing_cycle)
+        plan = sub.plan
+        if not plan:
+            return Response({"detail": "Cannot renew subscription because no plan is currently assigned."}, status=400)
+            
+        price = Decimal(str(plan.monthly_price if billing_cycle == 'monthly' else plan.yearly_price))
+        from django.utils import timezone
+        import datetime
+        now = timezone.now()
+        
+        current_end = sub.end_date if sub.is_currently_active() and sub.end_date else now
+        cycle_days = {'monthly': 30, 'quarterly': 91, 'half_yearly': 182, 'yearly': 365}
+        days = cycle_days.get(billing_cycle)
+        new_end = current_end + datetime.timedelta(days=days) if days else None
+        
+        sub.status = 'active'
+        sub.billing_cycle = billing_cycle
+        sub.end_date = new_end
+        sub.save()
+        
+        import random
+        txn = MemberPremiumTransaction.objects.create(
+            subscription=sub,
+            transaction_type='renewal',
+            transaction_status='success',
+            amount=price,
+            gst_amount=price * Decimal('0.18'),
+            total_amount=price * Decimal('1.18'),
+            payment_method=request.data.get('payment_method', 'Razorpay'),
+            transaction_ref=f"TXN-REN-{random.randint(100000, 999999)}",
+            plan=plan,
+            billing_cycle=billing_cycle
+        )
+        
+        import time
+        import random
+        random_suffix = random.randint(1000, 9999)
+        invoice_no = f"INV-MP-{int(time.time())}-{random_suffix}"
+        MemberPremiumInvoice.objects.create(
+            transaction=txn,
+            invoice_no=invoice_no,
+            gst_invoice_no=f"GST-MP-{int(time.time())}-{random_suffix}",
+            subtotal=price,
+            gst_percentage=18,
+            gst_amount=txn.gst_amount,
+            total=txn.total_amount,
+            paid=True,
+            notes=f"Renewal of plan {plan.name}."
+        )
+        
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_renewed',
+            member=sub.member,
+            subscription=sub,
+            plan=plan,
+            description=f"Subscription renewed for {billing_cycle}",
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        if sub.member and sub.member.user:
+            self._clear_sidebar_cache(sub.member.user)
+        return Response(MemberPremiumSubscriptionSerializer(sub, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='activate')
+    def activate(self, request, pk=None):
+        sub = self.get_object()
+        billing_cycle = request.data.get('billing_cycle', sub.billing_cycle)
+        plan = sub.plan
+        from django.utils import timezone
+        import datetime
+        now = timezone.now()
+        sub.status = 'active'
+        sub.start_date = now
+        cycle_days = {'monthly': 30, 'quarterly': 91, 'half_yearly': 182, 'yearly': 365, 'lifetime': None, 'trial': plan.trial_days if plan else 14}
+        days = cycle_days.get(billing_cycle)
+        if days:
+            sub.end_date = now + datetime.timedelta(days=days)
+        else:
+            sub.end_date = None
+        sub.billing_cycle = billing_cycle
+        sub.save()
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_activated',
+            member=sub.member,
+            subscription=sub,
+            plan=plan,
+            description=f"Subscription activated – {billing_cycle}",
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        if sub.member and sub.member.user:
+            self._clear_sidebar_cache(sub.member.user)
+        return Response(MemberPremiumSubscriptionSerializer(sub, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='cancel')
+    def cancel(self, request, pk=None):
+        sub = self.get_object()
+        sub.status = 'cancelled'
+        sub.auto_renew = False
+        sub.save()
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_cancelled',
+            member=sub.member,
+            subscription=sub,
+            plan=sub.plan,
+            description=request.data.get('reason', 'Cancelled by admin'),
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        if sub.member and sub.member.user:
+            self._clear_sidebar_cache(sub.member.user)
+        return Response({"detail": "Subscription cancelled."})
+
+    @action(detail=True, methods=['post'], url_path='suspend')
+    def suspend(self, request, pk=None):
+        sub = self.get_object()
+        sub.status = 'suspended'
+        sub.save()
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_suspended',
+            member=sub.member,
+            subscription=sub,
+            plan=sub.plan,
+            description=request.data.get('reason', 'Suspended by admin'),
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        if sub.member and sub.member.user:
+            self._clear_sidebar_cache(sub.member.user)
+        return Response({"detail": "Subscription suspended."})
+
+    @action(detail=True, methods=['post'], url_path='upgrade')
+    def upgrade(self, request, pk=None):
+        sub = self.get_object()
+        new_plan_id = request.data.get('plan_id')
+        billing_cycle = request.data.get('billing_cycle', 'monthly')
+        payment_method = request.data.get('payment_method', 'Razorpay')
+        
+        if not new_plan_id:
+            return Response({"detail": "plan_id is required."}, status=400)
+        try:
+            new_plan = MemberPremiumPlan.objects.get(id=new_plan_id)
+        except MemberPremiumPlan.DoesNotExist:
+            return Response({"detail": "Plan not found."}, status=404)
+            
+        old_plan = sub.plan
+        
+        # Calculate new end date based on billing cycle
+        from django.utils import timezone
+        import datetime
+        from decimal import Decimal
+        import random
+        import time
+        
+        now = timezone.now()
+        cycle_days = {'monthly': 30, 'quarterly': 91, 'half_yearly': 182, 'yearly': 365, 'lifetime': None}
+        days = cycle_days.get(billing_cycle)
+        new_end = now + datetime.timedelta(days=days) if days else None
+        
+        sub.plan = new_plan
+        sub.status = 'active'
+        sub.billing_cycle = billing_cycle
+        sub.start_date = now
+        sub.end_date = new_end
+        sub.save()
+        
+        # Calculate price
+        cycle_prices = {
+            'monthly': new_plan.monthly_price,
+            'quarterly': new_plan.quarterly_price,
+            'half_yearly': new_plan.half_yearly_price,
+            'yearly': new_plan.yearly_price,
+            'lifetime': new_plan.lifetime_price,
+        }
+        price = Decimal(str(cycle_prices.get(billing_cycle, new_plan.monthly_price)))
+        
+        # Record Transaction
+        txn = MemberPremiumTransaction.objects.create(
+            subscription=sub,
+            transaction_type='upgrade',
+            transaction_status='success',
+            amount=price,
+            gst_amount=price * Decimal('0.18'),
+            total_amount=price * Decimal('1.18'),
+            payment_method=payment_method,
+            transaction_ref=f"TXN-UPG-{random.randint(100000, 999999)}",
+            plan=new_plan,
+            billing_cycle=billing_cycle
+        )
+        
+        import random
+        random_suffix = random.randint(1000, 9999)
+        invoice_no = f"INV-MP-{int(time.time())}-{random_suffix}"
+        MemberPremiumInvoice.objects.create(
+            transaction=txn,
+            invoice_no=invoice_no,
+            gst_invoice_no=f"GST-MP-{int(time.time())}-{random_suffix}",
+            subtotal=price,
+            gst_percentage=18,
+            gst_amount=txn.gst_amount,
+            total=txn.total_amount,
+            paid=True,
+            notes=f"Upgrade to plan {new_plan.name} ({billing_cycle})."
+        )
+        
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_upgraded',
+            member=sub.member,
+            subscription=sub,
+            plan=new_plan,
+            old_value=old_plan.name if old_plan else '',
+            new_value=new_plan.name,
+            description=f"Upgraded from {old_plan.name if old_plan else 'N/A'} to {new_plan.name} ({billing_cycle})",
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        if sub.member and sub.member.user:
+            self._clear_sidebar_cache(sub.member.user)
+        return Response(MemberPremiumSubscriptionSerializer(sub, context={'request': request}).data)
+
+    @action(detail=False, methods=['post'], url_path='assign')
+    def assign_subscription(self, request):
+        member_id = request.data.get('member_id')
+        plan_id = request.data.get('plan_id')
+        billing_cycle = request.data.get('billing_cycle', 'monthly')
+        amount_paid = request.data.get('amount_paid', 0)
+        payment_method = request.data.get('payment_method', 'Manual')
+        notes = request.data.get('notes', '')
+
+        try:
+            member = Member.objects.get(id=member_id)
+            plan = MemberPremiumPlan.objects.get(id=plan_id)
+        except (Member.DoesNotExist, MemberPremiumPlan.DoesNotExist) as e:
+            return Response({"detail": str(e)}, status=400)
+
+        from django.utils import timezone
+        import datetime
+        now = timezone.now()
+        cycle_days = {'monthly': 30, 'quarterly': 91, 'half_yearly': 182, 'yearly': 365}
+        days = cycle_days.get(billing_cycle)
+
+        sub = MemberPremiumSubscription.objects.create(
+            member=member,
+            plan=plan,
+            status='active',
+            billing_cycle=billing_cycle,
+            start_date=now,
+            end_date=now + datetime.timedelta(days=days) if days else None,
+            auto_renew=True,
+            amount_paid=amount_paid,
+            payment_method=payment_method,
+            notes=notes,
+        )
+        MemberPremiumAuditLog.objects.create(
+            action='subscription_activated',
+            member=member,
+            subscription=sub,
+            plan=plan,
+            description=f"Plan assigned by admin: {plan.name} ({billing_cycle})",
+            performed_by=request.user if request.user.is_authenticated else None,
+        )
+        return Response(MemberPremiumSubscriptionSerializer(sub, context={'request': request}).data, status=201)
+
+    @action(detail=False, methods=['post'], url_path='check-feature')
+    def check_feature(self, request):
+        member_id = request.data.get('member_id')
+        if not member_id and request.user.is_authenticated:
+            try:
+                member = request.user.member_profile
+            except Exception:
+                return Response({"has_access": False, "reason": "Member not found."})
+        else:
+            try:
+                member = Member.objects.get(id=member_id)
+            except Member.DoesNotExist:
+                return Response({"has_access": False, "reason": "Member not found."})
+
+        feature_code = request.data.get('feature_code', '').upper()
+        has_access, reason = check_member_feature_limit(member, feature_code)
+        
+        if not has_access:
+            return Response({
+                "has_access": False,
+                "reason": reason,
+                "upgrade_message": reason
+            })
+            
+        sub = MemberPremiumSubscription.objects.filter(member=member).order_by('-created_at').first()
+        plan = sub.plan if sub else None
+        feature = MemberPremiumFeature.objects.filter(plan=plan, feature_code=feature_code).first()
+        
+        if feature:
+            usage = MemberFeatureUsage.objects.filter(subscription=sub, feature_code=feature_code).first()
+            used = usage.used_count if usage else 0
+            if feature.is_unlimited or feature.limit_type == 'unlimited':
+                return Response({"has_access": True, "feature": MemberPremiumFeatureSerializer(feature).data, "unlimited": True})
+            else:
+                return Response({
+                    "has_access": True,
+                    "feature": MemberPremiumFeatureSerializer(feature).data,
+                    "used": used,
+                    "limit": feature.limit_value,
+                    "remaining": max(0, feature.limit_value - used)
+                })
+                
+        return Response({"has_access": True, "unlimited": True})
+
+
+class MemberFeatureUsageViewSet(viewsets.ModelViewSet):
+    queryset = MemberFeatureUsage.objects.all()
+    serializer_class = MemberFeatureUsageSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(subscription__member__user=user)
+        return qs
+
+
+class MemberPremiumTransactionViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumTransaction.objects.select_related('plan', 'subscription__member').order_by('-created_at')
+    serializer_class = MemberPremiumTransactionSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(subscription__member__user=user)
+        subscription_id = self.request.query_params.get('subscription')
+        if subscription_id:
+            qs = qs.filter(subscription_id=subscription_id)
+        return qs
+
+
+class MemberPremiumInvoiceViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumInvoice.objects.all().order_by('-created_at')
+    serializer_class = MemberPremiumInvoiceSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(transaction__subscription__member__user=user)
+        return qs
+
+    def perform_create(self, serializer):
+        import time
+        import random
+        random_suffix = random.randint(1000, 9999)
+        invoice_no = f"INV-MP-{int(time.time())}-{random_suffix}"
+        serializer.save(invoice_no=invoice_no)
+
+
+class MemberAddonPurchaseViewSet(viewsets.ModelViewSet):
+    queryset = MemberAddonPurchase.objects.select_related('member', 'addon').order_by('-created_at')
+    serializer_class = MemberAddonPurchaseSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(member__user=user)
+        return qs
+
+
+class MemberPremiumAuditLogViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumAuditLog.objects.select_related('member', 'subscription', 'plan', 'performed_by').order_by('-timestamp')
+    serializer_class = MemberPremiumAuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        member = getattr(user, 'member_profile', None) if user.is_authenticated else None
+        serializer.save(
+            member=member,
+            performed_by=user if user.is_authenticated else None
+        )
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(member__user=user)
+        member_id = self.request.query_params.get('member')
+        plan_id = self.request.query_params.get('plan')
+        action_filter = self.request.query_params.get('action')
+        if member_id:
+            qs = qs.filter(member_id=member_id)
+        if plan_id:
+            qs = qs.filter(plan_id=plan_id)
+        if action_filter:
+            qs = qs.filter(action=action_filter)
+        return qs
+
+
+class MemberPremiumRewardViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumReward.objects.all().order_by('-id')
+    serializer_class = MemberPremiumRewardSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(member__user=user)
+        return qs
+
+
+class MemberPremiumSupportTicketViewSet(viewsets.ModelViewSet):
+    queryset = MemberPremiumSupportTicket.objects.all().order_by('-created_at')
+    serializer_class = MemberPremiumSupportTicketSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if not user.is_superuser:
+            qs = qs.filter(member__user=user)
+        return qs
+
+    def perform_create(self, serializer):
+        import random
+        ticket_no = f"{random.randint(100000, 999999)}"
+        member = self.request.user.member_profile
+        serializer.save(member=member, ticket_no=ticket_no)
+
+
+# Phase 3.3: Community Subscription Management ViewSets
+class CommunityLicenseViewSet(viewsets.ModelViewSet):
+    queryset = CommunityLicense.objects.all().order_by('-activated_date')
+    serializer_class = CommunityLicenseSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityModuleAccessViewSet(viewsets.ModelViewSet):
+    queryset = CommunityModuleAccess.objects.all().order_by('module__sort_order')
+    serializer_class = CommunityModuleAccessSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityUsageViewSet(viewsets.ModelViewSet):
+    queryset = CommunityUsage.objects.all()
+    serializer_class = CommunityUsageSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityBillingViewSet(viewsets.ModelViewSet):
+    queryset = CommunityBilling.objects.all()
+    serializer_class = CommunityBillingSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityInvoiceViewSet(viewsets.ModelViewSet):
+    queryset = CommunityInvoice.objects.all().order_by('-created_at')
+    serializer_class = CommunityInvoiceSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityTransactionViewSet(viewsets.ModelViewSet):
+    queryset = CommunityTransaction.objects.all().order_by('-created_at')
+    serializer_class = CommunityTransactionSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        invoice_id = self.request.query_params.get('invoice')
+        if invoice_id:
+            qs = qs.filter(invoice_id=invoice_id)
+        return qs
+
+
+class CommunityAddonViewSet(viewsets.ModelViewSet):
+    queryset = CommunityAddon.objects.all().order_by('-id')
+    serializer_class = CommunityAddonSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+
+class CommunityAuditLogViewSet(viewsets.ModelViewSet):
+    queryset = CommunityAuditLog.objects.all().order_by('-timestamp')
+    serializer_class = CommunityAuditLogSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        community_id = self.request.query_params.get('community')
+        if community_id:
+            qs = qs.filter(community_id=community_id)
+        return qs
+
+

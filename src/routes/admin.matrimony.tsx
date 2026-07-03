@@ -122,7 +122,7 @@ function MatrimonyAdminPage() {
   const handleUpdateStatus = async (id: number, newStatus: string) => {
     setActionLoading(id);
     try {
-      await api.updateMatrimonyProfile({ status: newStatus }, id);
+      await api.adminUpdateMatrimonyProfile(id, { status: newStatus });
       await fetchProfiles();
       if (selectedProfile && selectedProfile.id === id) {
         setSelectedProfile({ ...selectedProfile, status: newStatus });
@@ -144,7 +144,7 @@ function MatrimonyAdminPage() {
       if (action === "Delete") {
         await api.deleteMatrimonyProfile(id).catch(console.error);
       } else {
-        await api.updateMatrimonyProfile({ status: action }, id).catch(console.error);
+        await api.adminUpdateMatrimonyProfile(id, { status: action }).catch(console.error);
       }
     }
     setSelectedIds(new Set());

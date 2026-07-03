@@ -88,7 +88,7 @@ function CommunityAdminGallery() {
     if (!(options.body instanceof FormData)) {
       headers["Content-Type"] = "application/json";
     }
-    const res = await fetch(`http://localhost:8000/api${endpoint}`, { ...options, headers });
+    const res = await fetch(`/api${endpoint}`, { ...options, headers });
     if (!res.ok && res.status !== 204) {
       let msg = "API error";
       try {

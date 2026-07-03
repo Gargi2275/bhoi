@@ -77,6 +77,12 @@ function ProfilePage() {
       company: m.company || "",
       industry: m.industry || "",
       salary: m.salary || "",
+      jobWorkMode: m.job_work_mode || "On-site",
+      jobType: m.job_type || "Full-time",
+      jobCity: m.job_city || "",
+      jobState: m.job_state || "Gujarat",
+      jobCountry: m.job_country || "India",
+      jobAddress: m.job_address || "",
       businessName: m.business_name || "",
       businessCategory: m.business_category || "",
       gstNo: m.gst_no || "",
@@ -119,6 +125,9 @@ function ProfilePage() {
         profession_type: editForm.professionType,
         job_title: editForm.jobTitle, company: editForm.company,
         industry: editForm.industry, salary: editForm.salary,
+        job_work_mode: editForm.jobWorkMode, job_type: editForm.jobType,
+        job_city: editForm.jobCity, job_state: editForm.jobState,
+        job_country: editForm.jobCountry, job_address: editForm.jobAddress,
         business_name: editForm.businessName, business_category: editForm.businessCategory,
         gst_no: editForm.gstNo, business_years: editForm.businessYears,
         profession: editForm.professionType === "Job" ? editForm.jobTitle : editForm.businessName,
@@ -204,7 +213,6 @@ function ProfilePage() {
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <span className="text-sm text-warm-muted">{member?.community_name || user?.communityName}</span>
-              <PlanBadge plan={user?.plan || "Free"} />
             </div>
             <div className="text-xs text-warm-muted mt-1 flex items-center gap-1">
               <Mail className="w-3 h-3" /> {member?.email || user?.email}
@@ -281,6 +289,9 @@ function ProfilePage() {
                 f("Company", member?.company, Building2),
                 f("Industry", member?.industry),
                 f("Annual Salary", member?.salary ? `₹${member.salary} LPA` : null),
+                f("Work Mode", member?.job_work_mode),
+                f("Job Type", member?.job_type),
+                f("Job Location", [member?.job_city, member?.job_state].filter(Boolean).join(", "), MapPin),
               ].map(({ label, val, Icon }) => <InfoField key={label} label={label} value={val} Icon={Icon} />)}
             </div>
           </div>
@@ -410,6 +421,28 @@ function ProfilePage() {
                                 <EF label="Company" value={editForm.company} onChange={v => setEditForm({ ...editForm, company: v })} />
                                 <EF label="Industry" value={editForm.industry} onChange={v => setEditForm({ ...editForm, industry: v })} />
                                 <EF label="Annual Salary (LPA)" type="number" value={editForm.salary} onChange={v => setEditForm({ ...editForm, salary: v })} />
+                                <div>
+                                  <label className="block text-xs font-semibold text-warm-muted uppercase tracking-wider mb-1">Work Mode</label>
+                                  <select value={editForm.jobWorkMode} onChange={e => setEditForm({ ...editForm, jobWorkMode: e.target.value })} className="w-full px-3 py-2.5 rounded-xl border border-warm bg-white text-sm focus:outline-none focus:border-primary">
+                                    <option value="On-site">On-site</option>
+                                    <option value="Remote">Remote</option>
+                                    <option value="Hybrid">Hybrid</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-semibold text-warm-muted uppercase tracking-wider mb-1">Job Type</label>
+                                  <select value={editForm.jobType} onChange={e => setEditForm({ ...editForm, jobType: e.target.value })} className="w-full px-3 py-2.5 rounded-xl border border-warm bg-white text-sm focus:outline-none focus:border-primary">
+                                    <option value="Full-time">Full-time</option>
+                                    <option value="Part-time">Part-time</option>
+                                    <option value="Contract">Contract</option>
+                                    <option value="Internship">Internship</option>
+                                  </select>
+                                </div>
+                                <EF label="Job City" value={editForm.jobCity} onChange={v => setEditForm({ ...editForm, jobCity: v })} />
+                                <EF label="Job State" value={editForm.jobState} onChange={v => setEditForm({ ...editForm, jobState: v })} />
+                                <div className="sm:col-span-2">
+                                  <EF label="Job Address" value={editForm.jobAddress} onChange={v => setEditForm({ ...editForm, jobAddress: v })} />
+                                </div>
                               </> : <>
                                 <EF label="Business Name" value={editForm.businessName} onChange={v => setEditForm({ ...editForm, businessName: v })} />
                                 <EF label="Category" value={editForm.businessCategory} onChange={v => setEditForm({ ...editForm, businessCategory: v })} />

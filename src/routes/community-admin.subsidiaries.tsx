@@ -5,10 +5,12 @@ import { PageWrap } from "@/components/wag/PageWrap";
 import { AnimatedCard, Modal, StatusBadge, AvatarCircle } from "@/components/wag/primitives";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 export const Route = createFileRoute("/community-admin/subsidiaries")({
   component: () => {
     const { user } = useAuth();
+    const perms = useModulePermissions("subsidiaries");
     const [communities, setCommunities] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState("Pending");
@@ -310,7 +312,7 @@ export const Route = createFileRoute("/community-admin/subsidiaries")({
               </div>
 
               {/* Action Panel for Pending */}
-              {open.status === "Pending Parent Community Approval" && (
+              {open.status === "Pending Parent Community Approval" && perms.edit && (
                 <div className="border-t border-warm pt-4 space-y-3">
                   <h4 className="font-ui font-bold text-xs text-warm-muted uppercase tracking-wider">Take Action</h4>
                   <div>

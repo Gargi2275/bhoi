@@ -6,10 +6,12 @@ import { AnimatedCard, AvatarCircle, DetailDrawer, StatusBadge } from "@/compone
 import { cn, hasPermission, calculateAge } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 export const Route = createFileRoute("/community-admin/members")({
   component: () => {
     const { user } = useAuth();
+    const perms = useModulePermissions("members");
     const [members, setMembers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState("All");
@@ -320,7 +322,7 @@ export const Route = createFileRoute("/community-admin/members")({
 
               {/* ── ADMIN ACTIONS ── */}
               {(() => {
-                const isAuthorized = hasPermission(user, ["Approve Members"]);
+                const isAuthorized = hasPermission(user, ["Approve Members"]) && perms.approve;
 
                 if (!isAuthorized) {
                   return (

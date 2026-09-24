@@ -24,6 +24,7 @@ import { AnimatedCard, Modal, StatCard } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 function blankDonationForm() {
   return { donor: "", amount: "", campaign: "", method: "UPI", note: "" };
@@ -48,6 +49,7 @@ export const Route = createFileRoute("/community-admin/donations")({
 
 function CommunityAdminDonations() {
   const { user } = useAuth();
+  const perms = useModulePermissions("donations");
   const [tab, setTab] = useState("Donations"); // Donations, Campaigns, Analytics
   const [donationModal, setDonationModal] = useState(false);
   const [campaignModal, setCampaignModal] = useState(false);
@@ -205,19 +207,19 @@ function CommunityAdminDonations() {
         <div className="flex gap-2">
           {tab === "Donations" && (
             <>
-              {hasPermission(user, ["Export Donation Reports"]) && (
+              {hasPermission(user, ["Export Donation Reports"]) && perms.export && (
                 <button className="px-4 py-2.5 rounded-xl border border-warm text-sm font-semibold flex items-center gap-2 hover:bg-sand transition hidden sm:flex">
                   <Download className="w-4 h-4" />Export
                 </button>
               )}
-              {hasPermission(user, ["Manage Donations"]) && (
+              {hasPermission(user, ["Manage Donations"]) && perms.create && (
                 <button onClick={() => { setDForm({ ...blankDonationForm(), campaign: campaigns.length > 0 ? String(campaigns[0].id) : "" }); setDonationModal(true); }} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 shadow-sm hover:bg-primary/95 transition">
                   <Plus className="w-4 h-4" />Add Donation
                 </button>
               )}
             </>
           )}
-          {tab === "Campaigns" && hasPermission(user, ["Manage Donations"]) && (
+          {tab === "Campaigns" && hasPermission(user, ["Manage Donations"]) && perms.create && (
             <button onClick={openNewCampaign} className="px-4 py-2.5 rounded-xl bg-gold text-white text-sm font-semibold flex items-center gap-2 shadow-sm hover:bg-gold/90 transition">
               <Plus className="w-4 h-4" />New Campaign
             </button>
@@ -278,7 +280,7 @@ function CommunityAdminDonations() {
                         </td>
                         <td className="p-3.5 text-xs text-warm-muted max-w-[200px] truncate" title={d.note}>{d.note || "—"}</td>
                         <td className="p-3.5">
-                          {hasPermission(user, ["Manage Donations"]) && (
+                          {hasPermission(user, ["Manage Donations"]) && perms.delete && (
                             <button onClick={() => handleDeleteDonation(d.id)} className="p-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition" title="Delete record">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -367,12 +369,16 @@ function CommunityAdminDonations() {
                       <div className="flex gap-2 pt-3 border-t border-warm">
                         {hasPermission(user, ["Manage Donations"]) && (
                           <>
-                            <button onClick={() => openEditCampaign(c)} className="flex items-center gap-1 text-xs text-primary font-semibold hover:underline">
-                              <Edit className="w-3 h-3" /> Edit
-                            </button>
-                            <button onClick={() => handleDeleteCampaign(c.id)} className="flex items-center gap-1 text-xs text-red-500 font-semibold hover:underline ml-auto">
-                              <Trash2 className="w-3.5 h-3.5" /> Delete
-                            </button>
+                            {perms.edit && (
+                              <button onClick={() => openEditCampaign(c)} className="flex items-center gap-1 text-xs text-primary font-semibold hover:underline">
+                                <Edit className="w-3 h-3" /> Edit
+                              </button>
+                            )}
+                            {perms.delete && (
+                              <button onClick={() => handleDeleteCampaign(c.id)} className="flex items-center gap-1 text-xs text-red-500 font-semibold hover:underline ml-auto">
+                                <Trash2 className="w-3.5 h-3.5" /> Delete
+                              </button>
+                            )}
                           </>
                         )}
                       </div>

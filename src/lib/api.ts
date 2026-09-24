@@ -1654,6 +1654,9 @@ export const api = {
   async getMyPlan(): Promise<any> {
     return await apiFetch<any>("/community-subscriptions/my-plan/");
   },
+  async getSubscriptionPlans(): Promise<any[]> {
+    try { return await apiFetch<any[]>("/plans/"); } catch { return []; }
+  },
   async getCommunitySubscriptions(): Promise<any[]> {
     try { return await apiFetch<any[]>("/community-subscriptions/"); } catch { return []; }
   },

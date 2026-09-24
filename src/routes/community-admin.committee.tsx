@@ -6,6 +6,7 @@ import { AnimatedCard, AvatarCircle, Modal } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 function getActionWord(perm: string) {
   const lower = perm.toLowerCase();
@@ -150,9 +151,10 @@ export const Route = createFileRoute("/community-admin/committee")({
       "Treasurer": "bg-green-50 text-green-700 border-green-200",
     };
 
-    const canAdd = hasPermission(user, ["Add Committee Members"]);
-    const canEdit = hasPermission(user, ["Edit Committee Members"]);
-    const canDelete = hasPermission(user, ["Remove Committee Members"]);
+    const perms = useModulePermissions("committee");
+    const canAdd = hasPermission(user, ["Add Committee Members"]) && perms.create;
+    const canEdit = hasPermission(user, ["Edit Committee Members"]) && perms.edit;
+    const canDelete = hasPermission(user, ["Remove Committee Members"]) && perms.delete;
 
     return (
       <PageWrap

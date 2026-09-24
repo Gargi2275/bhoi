@@ -29,7 +29,6 @@ function getModuleCodeFromPath(pathname: string): string | null {
   if (p.includes("/dashboard/advertisements")) return "advertisements";
   if (p.includes("/dashboard/properties")) return "properties";
   
-  // Admin / Community Admin routes
   if (p.includes("/community-admin/matrimony")) return "matrimony";
   if (p.includes("/community-admin/families")) return "family";
   if (p.includes("/community-admin/members")) return "members";
@@ -43,6 +42,7 @@ function getModuleCodeFromPath(pathname: string): string | null {
   if (p.includes("/community-admin/businesses")) return "business";
   if (p.includes("/community-admin/reports")) return "reports";
   if (p.includes("/community-admin/hierarchy")) return "hierarchy";
+  if (p.includes("/community-admin/subsidiaries")) return "subsidiaries";
   
   return null;
 }

@@ -15,6 +15,7 @@ from .views import (
     ResourceLockViewSet, ResourceDependencyViewSet,
     FeatureMasterViewSet, PlanFeaturePermissionViewSet, CommunitySubscriptionViewSet,
     SubscriptionHistoryViewSet, PlanAddonViewSet, FeatureUsageViewSet, SubscriptionAuditLogViewSet,
+    SystemQuotaViewSet,
     ApplicationModuleViewSet, ApplicationActionViewSet, ModuleActionViewSet, ApplicationModuleAuditLogViewSet,
     # Phase 2: Member Premium
     MemberPremiumPlanViewSet, MemberPremiumFeatureViewSet, MemberPremiumBenefitViewSet,
@@ -53,6 +54,7 @@ router.register(r'plan-permissions', PlanFeaturePermissionViewSet, basename='pla
 router.register(r'community-subscriptions', CommunitySubscriptionViewSet, basename='community-subscription')
 router.register(r'subscription-history', SubscriptionHistoryViewSet, basename='subscription-history')
 router.register(r'plan-addons', PlanAddonViewSet, basename='plan-addon')
+router.register(r'system-quotas', SystemQuotaViewSet, basename='system-quota')
 router.register(r'feature-usages', FeatureUsageViewSet, basename='feature-usage')
 router.register(r'subscription-audit-logs', SubscriptionAuditLogViewSet, basename='subscription-audit-log')
 router.register(r'roles', RoleViewSet, basename='role')

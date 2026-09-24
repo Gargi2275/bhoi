@@ -96,6 +96,9 @@ class Community(models.Model):
         return self.name
 
     def save(self, *args, **kwargs):
+        if not self.pk and self.parent:
+            from api.quota_engine import check_quota_limit
+            check_quota_limit(self.parent, 'max_communities')
         if self.parent:
             self.type = 'Subsidiary'
         else:
@@ -171,6 +174,26 @@ class Member(models.Model):
     def __str__(self):
         return self.name
 
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            from api.quota_engine import check_quota_limit
+            check_quota_limit(self.community, 'max_members')
+        if self.avatar and hasattr(self.avatar, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_avatar = False
+            if not self.pk:
+                is_new_avatar = True
+            else:
+                try:
+                    orig = Member.objects.get(pk=self.pk)
+                    if orig.avatar != self.avatar:
+                        is_new_avatar = True
+                except Member.DoesNotExist:
+                    is_new_avatar = True
+            if is_new_avatar:
+                check_storage_quota(self.community, self.avatar.size)
+        super().save(*args, **kwargs)
+
 class Committee(models.Model):
     name = models.CharField(max_length=255)
     designation = models.CharField(max_length=100)
@@ -184,6 +207,26 @@ class Committee(models.Model):
     
     def __str__(self):
         return f"{self.name} - {self.designation} ({self.community.name})"
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            from api.quota_engine import check_quota_limit
+            check_quota_limit(self.community, 'max_committee_members')
+        if self.photo and hasattr(self.photo, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_photo = False
+            if not self.pk:
+                is_new_photo = True
+            else:
+                try:
+                    orig = Committee.objects.get(pk=self.pk)
+                    if orig.photo != self.photo:
+                        is_new_photo = True
+                except Committee.DoesNotExist:
+                    is_new_photo = True
+            if is_new_photo:
+                check_storage_quota(self.community, self.photo.size)
+        super().save(*args, **kwargs)
 
 class Event(models.Model):
     STATUSES = (
@@ -222,6 +265,23 @@ class Event(models.Model):
     
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        if self.img and hasattr(self.img, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_img = False
+            if not self.pk:
+                is_new_img = True
+            else:
+                try:
+                    orig = Event.objects.get(pk=self.pk)
+                    if orig.img != self.img:
+                        is_new_img = True
+                except Event.DoesNotExist:
+                    is_new_img = True
+            if is_new_img:
+                check_storage_quota(self.community, self.img.size)
+        super().save(*args, **kwargs)
 
 class Job(models.Model):
     TYPES = (
@@ -851,6 +911,23 @@ class News(models.Model):
     def __str__(self):
         return self.title
 
+    def save(self, *args, **kwargs):
+        if self.img and hasattr(self.img, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_img = False
+            if not self.pk:
+                is_new_img = True
+            else:
+                try:
+                    orig = News.objects.get(pk=self.pk)
+                    if orig.img != self.img:
+                        is_new_img = True
+                except News.DoesNotExist:
+                    is_new_img = True
+            if is_new_img:
+                check_storage_quota(self.community, self.img.size)
+        super().save(*args, **kwargs)
+
 class Family(models.Model):
     head = models.CharField(max_length=255)
     village = models.CharField(max_length=100, blank=True, default='')
@@ -859,6 +936,12 @@ class Family(models.Model):
     
     def __str__(self):
         return f"Family of {self.head} ({self.village})"
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            from api.quota_engine import check_quota_limit
+            check_quota_limit(self.community, 'max_family_members')
+        super().save(*args, **kwargs)
 
 class FamilyMember(models.Model):
     family = models.ForeignKey(Family, on_delete=models.CASCADE, related_name='members')
@@ -994,9 +1077,23 @@ class SubscriptionPlan(models.Model):
     def __str__(self):
         return self.name
 
+class ModulePermissionDefinition(models.Model):
+    feature = models.ForeignKey(FeatureMaster, related_name='permission_definitions', on_delete=models.CASCADE)
+    code = models.CharField(max_length=100) # e.g. "view_profiles"
+    name = models.CharField(max_length=200) # e.g. "View Profiles"
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('feature', 'code')
+
+    def __str__(self):
+        return f"{self.feature.name} - {self.name}"
+
 class PlanFeaturePermission(models.Model):
     plan = models.ForeignKey(SubscriptionPlan, related_name='feature_permissions', on_delete=models.CASCADE)
     feature = models.ForeignKey(FeatureMaster, on_delete=models.CASCADE)
+    
+    allowed_operations = models.JSONField(default=list, blank=True)
     
     can_view = models.BooleanField(default=False)
     can_create = models.BooleanField(default=False)
@@ -1045,14 +1142,28 @@ class SubscriptionHistory(models.Model):
     def __str__(self):
         return f"{self.community.name} - {self.action} on {self.created_at}"
 
+class SystemQuota(models.Model):
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, default='')
+    unit = models.CharField(max_length=50, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
 class PlanAddon(models.Model):
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, default='')
+    category = models.CharField(max_length=100, default='Core')
+    target_limit = models.ForeignKey(SystemQuota, on_delete=models.CASCADE, related_name='addons', null=True, blank=True)
+    increment = models.IntegerField(default=0)
     price = models.IntegerField(default=0)
     billing_cycle = models.CharField(max_length=50, default='Monthly') # Monthly, Quarterly, Yearly, Lifetime
-    limit_type = models.CharField(max_length=100) # extra_members, extra_storage, extra_sms, etc.
-    limit_value = models.IntegerField(default=0)
+    status = models.CharField(max_length=50, default='Active') # Active, Inactive
+    compatible_plans = models.ManyToManyField(SubscriptionPlan, blank=True, related_name='addons')
+    priority = models.IntegerField(default=0)
     active = models.BooleanField(default=True)
 
     def __str__(self):
@@ -1151,6 +1262,23 @@ class Gallery(models.Model):
     
     def __str__(self):
         return f"Gallery Photo {self.id} for {self.community.name}"
+
+    def save(self, *args, **kwargs):
+        if self.image and hasattr(self.image, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_image = False
+            if not self.pk:
+                is_new_image = True
+            else:
+                try:
+                    orig = Gallery.objects.get(pk=self.pk)
+                    if orig.image != self.image:
+                        is_new_image = True
+                except Gallery.DoesNotExist:
+                    is_new_image = True
+            if is_new_image:
+                check_storage_quota(self.community, self.image.size)
+        super().save(*args, **kwargs)
 
 class EmailTemplate(models.Model):
     STATUS_CHOICES = (
@@ -1330,6 +1458,23 @@ class BookingProperty(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.community.name}"
+
+    def save(self, *args, **kwargs):
+        if self.brochure_pdf and hasattr(self.brochure_pdf, 'size'):
+            from api.quota_engine import check_storage_quota
+            is_new_pdf = False
+            if not self.pk:
+                is_new_pdf = True
+            else:
+                try:
+                    orig = BookingProperty.objects.get(pk=self.pk)
+                    if orig.brochure_pdf != self.brochure_pdf:
+                        is_new_pdf = True
+                except BookingProperty.DoesNotExist:
+                    is_new_pdf = True
+            if is_new_pdf:
+                check_storage_quota(self.community, self.brochure_pdf.size)
+        super().save(*args, **kwargs)
 
 
 class PropertyResource(models.Model):

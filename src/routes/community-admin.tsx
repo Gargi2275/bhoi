@@ -3,7 +3,7 @@ import { AccessGuard } from "@/components/wag/AccessGuard";
 import { useAuth } from "@/context/AuthContext";
 import { DashboardSidebar, MobileBottomNav, MobileHeader, type SidebarItem } from "@/components/wag/Sidebar";
 import { LayoutDashboard, Users, UserCog, UsersRound, Calendar, Megaphone, Image, HandHeart, Briefcase, Building2, Heart, FileBarChart, CreditCard, Settings, ShieldCheck, CalendarCheck, MapPin, Box } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, createContext, useContext } from "react";
 import { api } from "@/lib/api";
 
 export const Route = createFileRoute("/community-admin")({
@@ -72,12 +72,78 @@ const labelToCodeMap: Record<string, string> = {
   "Settings": "settings",
 };
 
+export interface ModulePermission {
+  view: boolean;
+  create: boolean;
+  edit: boolean;
+  delete: boolean;
+  export: boolean;
+  import: boolean;
+  approve: boolean;
+  reject: boolean;
+  assign: boolean;
+  manage: boolean;
+}
+
+const ModulePermissionsContext = createContext<{
+  modules: any[];
+  getPermissions: (moduleCode: string) => ModulePermission;
+}>({
+  modules: [],
+  getPermissions: () => ({
+    view: true, create: true, edit: true, delete: true,
+    export: true, import: true, approve: true, reject: true,
+    assign: true, manage: true
+  })
+});
+
+export function useModulePermissions(moduleCode: string) {
+  const { getPermissions } = useContext(ModulePermissionsContext);
+  return getPermissions(moduleCode);
+}
+
 function Layout() {
   const { user, effectivePermissions } = useAuth();
   const navigate = useNavigate();
   const [isSuper, setIsSuper] = useState(false);
   const [deniedError, setDeniedError] = useState<string | null>(null);
   const [modules, setModules] = useState<any[]>([]);
+
+  const getPermissions = (moduleCode: string): ModulePermission => {
+    const defaultPerms = {
+      view: true, create: true, edit: true, delete: true,
+      export: true, import: true, approve: true, reject: true,
+      assign: true, manage: true
+    };
+    if (user?.role === "super_admin") return defaultPerms;
+    if (user?.role === "community_admin" && !user.customRoleName) {
+      const matched = modules.find((m: any) => m.module_code === moduleCode);
+      if (matched && matched.permissions) {
+        return {
+          view: !!matched.permissions.view,
+          create: !!matched.permissions.create,
+          edit: !!matched.permissions.edit,
+          delete: !!matched.permissions.delete,
+          export: !!matched.permissions.export,
+          import: !!matched.permissions.import,
+          approve: !!matched.permissions.approve,
+          reject: !!matched.permissions.reject,
+          assign: !!matched.permissions.assign,
+          manage: !!matched.permissions.manage,
+        };
+      }
+      if (matched && matched.locked) {
+        return {
+          view: false, create: false, edit: false, delete: false,
+          export: false, import: false, approve: false, reject: false,
+          assign: false, manage: false
+        };
+      }
+      return defaultPerms;
+    }
+    return defaultPerms;
+  };
+
 
   useEffect(() => {
     if (deniedError) {
@@ -105,11 +171,39 @@ function Layout() {
         })
         .catch(err => console.error("Error checking community type", err));
     }
-    api.getSidebarModules()
-      .then(res => {
-        setModules(res || []);
-      })
-      .catch(err => console.error("Error fetching community admin sidebar modules", err));
+
+    // Fetch sidebar modules AND subscription plan features in parallel
+    Promise.all([
+      api.getSidebarModules().catch(() => []),
+      api.getMyPlan().catch(() => null)
+    ]).then(([sidebarMods, planData]) => {
+      // Build a map of module_code -> plan status from the subscription plan features
+      const planFeatureMap: Record<string, string> = {};
+      if (planData?.features) {
+        for (const feat of planData.features) {
+          planFeatureMap[feat.code] = feat.status; // "Enabled", "Disabled", "Upgrade Required", "Limited"
+        }
+      }
+
+      // Always-unlocked modules regardless of plan
+      const alwaysUnlocked = new Set(["dashboard", "settings", "plans", "subscriptions"]);
+
+      // Merge locked state: if plan says Disabled/Upgrade Required → locked=true
+      const merged = (sidebarMods || []).map((m: any) => {
+        if (alwaysUnlocked.has(m.module_code)) return { ...m, locked: false };
+        const planStatus = planFeatureMap[m.module_code];
+        if (planStatus === "Disabled" || planStatus === "Upgrade Required") {
+          return { ...m, locked: true };
+        }
+        if (planStatus === "Enabled" || planStatus === "Limited") {
+          return { ...m, locked: false };
+        }
+        // If no plan data yet, fall back to whatever the sidebar module says
+        return m;
+      });
+
+      setModules(merged);
+    }).catch(err => console.error("Error fetching modules/plan", err));
   }, [user, navigate]);
 
   if (!user) return null;
@@ -223,9 +317,11 @@ function Layout() {
               </button>
             </div>
           )}
-          <AccessGuard>
-            <Outlet />
-          </AccessGuard>
+          <ModulePermissionsContext.Provider value={{ modules, getPermissions }}>
+            <AccessGuard>
+              <Outlet />
+            </AccessGuard>
+          </ModulePermissionsContext.Provider>
         </div>
       </div>
     </div>

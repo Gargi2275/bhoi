@@ -6,6 +6,7 @@ import { AnimatedCard, Modal } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 const NEWS_CATEGORIES = ["Meeting Notice", "Achievement", "Alert", "General", "Cultural", "Sports"];
 
@@ -16,6 +17,7 @@ function blankForm() {
 export const Route = createFileRoute("/community-admin/news")({
   component: () => {
     const { user } = useAuth();
+    const perms = useModulePermissions("news");
     const [news, setNews] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [open, setOpen] = useState(false);
@@ -99,7 +101,7 @@ export const Route = createFileRoute("/community-admin/news")({
         title="News & Announcements"
         desc={`${news.length} posts published`}
         action={
-          hasPermission(user, ["Create News"]) ? (
+          hasPermission(user, ["Create News"]) && perms.create ? (
             <button onClick={openCreate} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 hover:bg-primary/95 transition shadow-sm">
               <Plus className="w-4 h-4" /> Create News
             </button>
@@ -144,12 +146,12 @@ export const Route = createFileRoute("/community-admin/news")({
                   <h3 className="font-ui font-bold text-base line-clamp-2">{n.title}</h3>
                   {n.excerpt && <p className="text-sm text-warm-muted mt-1 line-clamp-3 flex-1">{n.excerpt}</p>}
                   <div className="flex gap-2 mt-4 pt-3 border-t border-warm">
-                    {hasPermission(user, ["Edit News"]) && (
+                    {hasPermission(user, ["Edit News"]) && perms.edit && (
                       <button onClick={() => openEdit(n)} className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-lg border border-warm hover:bg-sand transition font-medium">
                         <Edit className="w-3 h-3" /> Edit
                       </button>
                     )}
-                    {hasPermission(user, ["Delete News"]) && (
+                    {hasPermission(user, ["Delete News"]) && perms.delete && (
                       <button onClick={() => handleDelete(n.id)} className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition font-medium">
                         <Trash2 className="w-3 h-3" /> Delete
                       </button>

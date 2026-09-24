@@ -39,6 +39,7 @@ import { AnimatedCard, AvatarCircle } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 export const Route = createFileRoute("/community-admin/matrimony")({
   component: MatrimonyAdminDashboard,
@@ -46,6 +47,7 @@ export const Route = createFileRoute("/community-admin/matrimony")({
 
 function MatrimonyAdminDashboard() {
   const { user } = useAuth();
+  const perms = useModulePermissions("matrimony");
   
   // Profile list & Loading states
   const [profiles, setProfiles] = useState<any[]>([]);
@@ -293,7 +295,7 @@ function MatrimonyAdminDashboard() {
       title="Matrimony Management"
       desc="Enterprise-grade community matrimony admin portal & profile moderation"
       action={
-        hasPermission(user, ["Manage Matches"]) ? (
+        hasPermission(user, ["Manage Matches"]) && perms.create ? (
           <button
             onClick={() => setMatchOpen(true)}
             className="px-4 py-2.5 rounded-xl bg-gold text-white text-sm font-semibold flex items-center gap-2 hover:bg-gold/90 transition shadow-sm"
@@ -650,7 +652,7 @@ function MatrimonyAdminDashboard() {
 
                   <div className="flex flex-wrap gap-1.5">
                     {/* Approve (Only for Ready For Review / Draft / Suspended / Rejected) */}
-                    {p.status !== "Active" && p.status !== "Featured" && (
+                    {p.status !== "Active" && p.status !== "Featured" && perms.edit && (
                       <button
                         disabled={actionLoading === p.id}
                         onClick={() => handleUpdateStatus(p.id, "Active")}
@@ -661,7 +663,7 @@ function MatrimonyAdminDashboard() {
                     )}
 
                     {/* Reject */}
-                    {p.status === "Ready For Review" && (
+                    {p.status === "Ready For Review" && perms.edit && (
                       <button
                         disabled={actionLoading === p.id}
                         onClick={() => handleUpdateStatus(p.id, "Rejected")}
@@ -672,7 +674,7 @@ function MatrimonyAdminDashboard() {
                     )}
 
                     {/* Feature */}
-                    {p.status === "Active" && (
+                    {p.status === "Active" && perms.edit && (
                       <button
                         disabled={actionLoading === p.id}
                         onClick={() => handleUpdateStatus(p.id, "Featured")}
@@ -683,7 +685,7 @@ function MatrimonyAdminDashboard() {
                     )}
                     
                     {/* Unfeature */}
-                    {p.status === "Featured" && (
+                    {p.status === "Featured" && perms.edit && (
                       <button
                         disabled={actionLoading === p.id}
                         onClick={() => handleUpdateStatus(p.id, "Active")}
@@ -694,7 +696,7 @@ function MatrimonyAdminDashboard() {
                     )}
 
                     {/* Suspend */}
-                    {p.status !== "Suspended" && p.status !== "Deleted" && (
+                    {p.status !== "Suspended" && p.status !== "Deleted" && perms.edit && (
                       <button
                         disabled={actionLoading === p.id}
                         onClick={() => handleUpdateStatus(p.id, "Suspended")}
@@ -705,7 +707,7 @@ function MatrimonyAdminDashboard() {
                     )}
 
                     {/* Delete */}
-                    {p.status !== "Deleted" && (
+                    {p.status !== "Deleted" && perms.delete && (
                       <button
                         onClick={() => handleDeleteProfile(p.id)}
                         className="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-500 border border-red-200 text-xs font-bold transition"
@@ -1286,87 +1288,92 @@ function MatrimonyAdminDashboard() {
                             <Shield className="w-4 h-4" /> Moderation & Review Notes
                           </h3>
 
-                          <div className="space-y-3">
+                           <div className="space-y-3">
                             <label className="text-xs font-bold text-warm-muted block">Reviewer Notes (Persisted in DB)</label>
                             <textarea
                               rows={4}
                               value={reviewNotes}
                               onChange={(e) => setReviewNotes(e.target.value)}
+                              disabled={!perms.edit}
                               placeholder="Write administrative review notes regarding approval, reasons for rejection, or requested changes..."
-                              className="w-full p-4 bg-surface border border-warm rounded-2xl text-xs placeholder-warm-muted focus:outline-none focus:ring-1 focus:ring-gold"
+                              className="w-full p-4 bg-surface border border-warm rounded-2xl text-xs placeholder-warm-muted focus:outline-none focus:ring-1 focus:ring-gold disabled:opacity-85 disabled:cursor-not-allowed"
                             />
                             
-                            <div className="flex justify-end">
-                              <button
-                                disabled={actionLoading === selectedProfile.id}
-                                onClick={() => handleUpdateStatus(selectedProfile.id, selectedProfile.status, reviewNotes)}
-                                className="px-4 py-2 bg-gold text-white text-xs font-bold rounded-xl hover:bg-gold/90 transition flex items-center gap-1.5 shadow-sm"
-                              >
-                                {actionLoading === selectedProfile.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save Review Notes"}
-                              </button>
-                            </div>
+                            {perms.edit && (
+                              <div className="flex justify-end">
+                                <button
+                                  disabled={actionLoading === selectedProfile.id}
+                                  onClick={() => handleUpdateStatus(selectedProfile.id, selectedProfile.status, reviewNotes)}
+                                  className="px-4 py-2 bg-gold text-white text-xs font-bold rounded-xl hover:bg-gold/90 transition flex items-center gap-1.5 shadow-sm"
+                                >
+                                  {actionLoading === selectedProfile.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save Review Notes"}
+                                </button>
+                              </div>
+                            )}
                           </div>
 
-                          <div className="pt-4 border-t border-warm/60 space-y-4">
-                            <h4 className="text-xs font-black uppercase tracking-wider text-warm-muted font-ui">Status Transitions</h4>
-                            
-                            <div className="flex flex-wrap gap-3">
-                              {/* Approve Profile */}
-                              {selectedProfile.status !== "Active" && selectedProfile.status !== "Featured" && (
-                                <button
-                                  disabled={actionLoading === selectedProfile.id}
-                                  onClick={() => handleUpdateStatus(selectedProfile.id, "Active", reviewNotes)}
-                                  className="px-4 py-2.5 rounded-xl bg-teal text-white text-xs font-bold hover:bg-teal/90 transition shadow-sm flex items-center gap-1.5"
-                                >
-                                  <CheckCircle className="w-4 h-4" /> Approve Profile
-                                </button>
-                              )}
+                          {perms.edit && (
+                            <div className="pt-4 border-t border-warm/60 space-y-4">
+                              <h4 className="text-xs font-black uppercase tracking-wider text-warm-muted font-ui">Status Transitions</h4>
+                              
+                              <div className="flex flex-wrap gap-3">
+                                {/* Approve Profile */}
+                                {selectedProfile.status !== "Active" && selectedProfile.status !== "Featured" && (
+                                  <button
+                                    disabled={actionLoading === selectedProfile.id}
+                                    onClick={() => handleUpdateStatus(selectedProfile.id, "Active", reviewNotes)}
+                                    className="px-4 py-2.5 rounded-xl bg-teal text-white text-xs font-bold hover:bg-teal/90 transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <CheckCircle className="w-4 h-4" /> Approve Profile
+                                  </button>
+                                )}
 
-                              {/* Reject Profile */}
-                              {selectedProfile.status !== "Rejected" && (
-                                <button
-                                  disabled={actionLoading === selectedProfile.id}
-                                  onClick={() => handleUpdateStatus(selectedProfile.id, "Rejected", reviewNotes)}
-                                  className="px-4 py-2.5 rounded-xl bg-red-600 text-white text-xs font-bold hover:bg-red-700 transition shadow-sm flex items-center gap-1.5"
-                                >
-                                  <XCircle className="w-4 h-4" /> Reject Profile
-                                </button>
-                              )}
+                                {/* Reject Profile */}
+                                {selectedProfile.status !== "Rejected" && (
+                                  <button
+                                    disabled={actionLoading === selectedProfile.id}
+                                    onClick={() => handleUpdateStatus(selectedProfile.id, "Rejected", reviewNotes)}
+                                    className="px-4 py-2.5 rounded-xl bg-red-600 text-white text-xs font-bold hover:bg-red-700 transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <XCircle className="w-4 h-4" /> Reject Profile
+                                  </button>
+                                )}
 
-                              {/* Request Changes */}
-                              {selectedProfile.status !== "Draft" && (
-                                <button
-                                  disabled={actionLoading === selectedProfile.id}
-                                  onClick={() => handleUpdateStatus(selectedProfile.id, "Draft", reviewNotes)}
-                                  className="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-bold hover:bg-amber-600 transition shadow-sm flex items-center gap-1.5"
-                                >
-                                  <AlertTriangle className="w-4 h-4" /> Request Changes (Draft)
-                                </button>
-                              )}
+                                {/* Request Changes */}
+                                {selectedProfile.status !== "Draft" && (
+                                  <button
+                                    disabled={actionLoading === selectedProfile.id}
+                                    onClick={() => handleUpdateStatus(selectedProfile.id, "Draft", reviewNotes)}
+                                    className="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-bold hover:bg-amber-600 transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <AlertTriangle className="w-4 h-4" /> Request Changes (Draft)
+                                  </button>
+                                )}
 
-                              {/* Feature Profile */}
-                              {selectedProfile.status === "Active" && (
-                                <button
-                                  disabled={actionLoading === selectedProfile.id}
-                                  onClick={() => handleUpdateStatus(selectedProfile.id, "Featured", reviewNotes)}
-                                  className="px-4 py-2.5 rounded-xl bg-yellow-500 text-white text-xs font-bold hover:bg-yellow-600 transition shadow-sm flex items-center gap-1.5"
-                                >
-                                  <Star className="w-4 h-4 fill-white" /> Feature Profile
-                                </button>
-                              )}
+                                {/* Feature Profile */}
+                                {selectedProfile.status === "Active" && (
+                                  <button
+                                    disabled={actionLoading === selectedProfile.id}
+                                    onClick={() => handleUpdateStatus(selectedProfile.id, "Featured", reviewNotes)}
+                                    className="px-4 py-2.5 rounded-xl bg-yellow-500 text-white text-xs font-bold hover:bg-yellow-600 transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <Star className="w-4 h-4 fill-white" /> Feature Profile
+                                  </button>
+                                )}
 
-                              {/* Suspend Profile */}
-                              {selectedProfile.status !== "Suspended" && (
-                                <button
-                                  disabled={actionLoading === selectedProfile.id}
-                                  onClick={() => handleUpdateStatus(selectedProfile.id, "Suspended", reviewNotes)}
-                                  className="px-4 py-2.5 rounded-xl bg-zinc-800 text-white text-xs font-bold hover:bg-zinc-900 dark:hover:bg-zinc-700 transition shadow-sm flex items-center gap-1.5"
-                                >
-                                  <XCircle className="w-4 h-4" /> Suspend Profile
-                                </button>
-                              )}
+                                {/* Suspend Profile */}
+                                {selectedProfile.status !== "Suspended" && (
+                                  <button
+                                    disabled={actionLoading === selectedProfile.id}
+                                    onClick={() => handleUpdateStatus(selectedProfile.id, "Suspended", reviewNotes)}
+                                    className="px-4 py-2.5 rounded-xl bg-zinc-800 text-white text-xs font-bold hover:bg-zinc-900 dark:hover:bg-zinc-700 transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <XCircle className="w-4 h-4" /> Suspend Profile
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                          </div>
+                          )}
                         </div>
                       </div>
                     )}

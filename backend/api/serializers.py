@@ -7,8 +7,8 @@ from .models import (
     CommunityApprovalHistory, Notification, SubscriptionPlan, Role, Advertisement,
     Gallery, PartnerPreference, ProfileVisibility, InterestRequest, Wishlist, ProfileView,
     MatrimonyPhoto, MatrimonyAuditLog, JobApplication,
-    FeatureMaster, PlanFeaturePermission, CommunitySubscription,
-    SubscriptionHistory, PlanAddon, FeatureUsage, SubscriptionAuditLog,
+    FeatureMaster, PlanFeaturePermission, CommunitySubscription, ModulePermissionDefinition,
+    SubscriptionHistory, PlanAddon, FeatureUsage, SubscriptionAuditLog, SystemQuota,
     ApplicationModule, ApplicationAction, ModuleAction, ApplicationModuleAuditLog,
     MemberPremiumPlan, MemberPremiumFeature, MemberPremiumBenefit,
     MemberPremiumAddon, MemberPremiumCoupon, MemberPremiumSubscription,
@@ -913,10 +913,16 @@ class CommunityApprovalHistorySerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id', 'created_at']
 
+class ModulePermissionDefinitionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ModulePermissionDefinition
+        fields = ('id', 'code', 'name')
+
 class FeatureMasterSerializer(serializers.ModelSerializer):
+    permission_definitions = ModulePermissionDefinitionSerializer(many=True, read_only=True)
     class Meta:
         model = FeatureMaster
-        fields = '__all__'
+        fields = ('id', 'name', 'code', 'description', 'active', 'created_at', 'permission_definitions')
 
 class PlanFeaturePermissionSerializer(serializers.ModelSerializer):
     feature_name = serializers.ReadOnlyField(source='feature.name')
@@ -943,7 +949,19 @@ class SubscriptionHistorySerializer(serializers.ModelSerializer):
         model = SubscriptionHistory
         fields = '__all__'
 
+class SystemQuotaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SystemQuota
+        fields = '__all__'
+
 class PlanAddonSerializer(serializers.ModelSerializer):
+    target_limit_details = SystemQuotaSerializer(source='target_limit', read_only=True)
+    target_limit = serializers.SlugRelatedField(
+        queryset=SystemQuota.objects.all(),
+        slug_field='code',
+        required=False,
+        allow_null=True
+    )
     class Meta:
         model = PlanAddon
         fields = '__all__'
@@ -1332,6 +1350,7 @@ class ApplicationModuleSerializer(serializers.ModelSerializer):
     actions = serializers.SerializerMethodField(read_only=True)
     parent_module_name = serializers.ReadOnlyField(source='parent_module.display_name')
     locked = serializers.SerializerMethodField(read_only=True)
+    permissions = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ApplicationModule
@@ -1339,6 +1358,82 @@ class ApplicationModuleSerializer(serializers.ModelSerializer):
 
     def get_actions(self, obj):
         return [ma.action.name for ma in obj.module_actions.all()]
+
+    def get_permissions(self, obj):
+        request = self.context.get('request')
+        default_perms = {
+            'view': True,
+            'create': True,
+            'edit': True,
+            'delete': True,
+            'export': True,
+            'import': True,
+            'approve': True,
+            'reject': True,
+            'assign': True,
+            'manage': True
+        }
+        if not request or not request.user or not request.user.is_authenticated:
+            return default_perms
+            
+        user = request.user
+        is_super = user.is_superuser
+        try:
+            member = user.member_profile
+            if member and member.role == 'super_admin':
+                is_super = True
+        except Exception:
+            member = None
+            
+        if is_super:
+            return default_perms
+            
+        if not member:
+            return default_perms
+            
+        if member.role == 'community_admin':
+            from api.models import CommunitySubscription, SubscriptionPlan, FeatureMaster, PlanFeaturePermission
+            always_available_admin = {'dashboard', 'plans', 'plan', 'settings', 'subscriptions'}
+            if obj.module_code in always_available_admin:
+                return default_perms
+                
+            community = member.community
+            if not community:
+                return default_perms
+                
+            sub = CommunitySubscription.objects.filter(community=community).first()
+            if not sub:
+                plan = SubscriptionPlan.objects.filter(code="basic").first()
+                if not plan:
+                    plan = SubscriptionPlan.objects.first()
+            else:
+                plan = sub.plan
+                
+            if not plan:
+                return default_perms
+                
+            feature = FeatureMaster.objects.filter(code=obj.module_code).first()
+            if not feature:
+                return default_perms
+                
+            perm = PlanFeaturePermission.objects.filter(plan=plan, feature=feature).first()
+            if perm:
+                return {
+                    'view': perm.can_view,
+                    'create': perm.can_create,
+                    'edit': perm.can_edit,
+                    'delete': perm.can_delete,
+                    'export': perm.can_export,
+                    'import': perm.can_import,
+                    'approve': perm.can_approve,
+                    'reject': perm.can_reject,
+                    'assign': perm.can_assign,
+                    'manage': perm.can_manage
+                }
+            
+            return {k: False for k in default_perms}
+            
+        return default_perms
 
     def get_locked(self, obj):
         request = self.context.get('request')

@@ -6,6 +6,7 @@ import { AnimatedCard, Modal } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 const JOB_TYPES = ["Full-time", "Part-time", "Internship", "Remote", "Contract", "Freelance"];
 const JOB_CATEGORIES = ["Tech", "Marketing", "Finance", "Engineering", "Healthcare", "Design", "Sales", "Education", "Operations", "Other"];
@@ -31,6 +32,7 @@ export const Route = createFileRoute("/community-admin/jobs")({
 
 function CommunityAdminJobsPage() {
   const { user } = useAuth();
+  const perms = useModulePermissions("jobs");
   const [activeTab, setActiveTab] = useState<"Postings" | "Applications">("Postings");
   const [jobs, setJobs] = useState<any[]>([]);
   const [applications, setApplications] = useState<any[]>([]);
@@ -167,7 +169,7 @@ function CommunityAdminJobsPage() {
       title="Jobs Management"
       desc="Create jobs and moderate incoming applicant submissions"
       action={
-        activeTab === "Postings" && hasPermission(user, ["Create Jobs"]) ? (
+        activeTab === "Postings" && hasPermission(user, ["Create Jobs"]) && perms.create ? (
           <button onClick={openCreate} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 hover:bg-primary/95 transition shadow-sm">
             <Plus className="w-4 h-4" /> Post Job
           </button>
@@ -249,12 +251,12 @@ function CommunityAdminJobsPage() {
                       </td>
                       <td className="p-3">
                         <div className="flex items-center gap-1.5">
-                          {hasPermission(user, ["Edit Jobs"]) && (
+                          {hasPermission(user, ["Edit Jobs"]) && perms.edit && (
                             <button onClick={() => openEdit(j)} className="p-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition" title="Edit Job">
                               <Edit className="w-3.5 h-3.5" />
                             </button>
                           )}
-                          {hasPermission(user, ["Delete Jobs"]) && (
+                          {hasPermission(user, ["Delete Jobs"]) && perms.delete && (
                             <button onClick={() => handleDelete(j.id)} className="p-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition" title="Delete Job">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -335,8 +337,10 @@ function CommunityAdminJobsPage() {
                         <select 
                           value={app.status} 
                           onChange={(e) => handleStatusChange(app.id, e.target.value)}
+                          disabled={!perms.edit}
                           className={cn(
-                            "text-xs font-bold px-2 py-1 rounded-xl focus:outline-none border cursor-pointer",
+                            "text-xs font-bold px-2 py-1 rounded-xl focus:outline-none border",
+                            !perms.edit ? "cursor-not-allowed opacity-80" : "cursor-pointer",
                             STATUS_COLORS[app.status] || "bg-sand text-slate-800 border-warm"
                           )}
                         >

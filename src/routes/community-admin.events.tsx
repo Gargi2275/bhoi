@@ -25,6 +25,7 @@ import { AnimatedCard, Modal, StatusBadge } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 const EVENT_CATEGORIES = [
   "Cultural", 
@@ -79,6 +80,7 @@ export const Route = createFileRoute("/community-admin/events")({
 
 function CommunityAdminEvents() {
   const { user } = useAuth();
+  const perms = useModulePermissions("events");
   
   // Data State
   const [events, setEvents] = useState<any[]>([]);
@@ -309,7 +311,7 @@ function CommunityAdminEvents() {
       desc={`${events.length} events active in your samaj portal`}
       action={
         <div className="flex gap-2">
-          {activeTab === "events" && hasPermission(user, ["Create Events"]) && (
+          {activeTab === "events" && hasPermission(user, ["Create Events"]) && perms.create && (
             <button onClick={openCreate} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 hover:bg-primary/95 transition shadow-sm">
               <Plus className="w-4 h-4" /> Create Event
             </button>
@@ -406,12 +408,12 @@ function CommunityAdminEvents() {
                           <Users className="w-3.5 h-3.5 text-primary" /> Manage Attendees
                         </button>
                         
-                        {hasPermission(user, ["Edit Events"]) && (
+                        {hasPermission(user, ["Edit Events"]) && perms.edit && (
                           <button onClick={() => openEdit(e)} className="p-1.5 rounded-lg border border-warm hover:bg-sand transition" title="Edit Event">
                             <Edit className="w-3.5 h-3.5 text-warm-muted" />
                           </button>
                         )}
-                        {hasPermission(user, ["Delete Events"]) && (
+                        {hasPermission(user, ["Delete Events"]) && perms.delete && (
                           <button onClick={() => handleDelete(e.id)} className="p-1.5 rounded-lg border border-red-100 bg-red-50 hover:bg-red-100 transition" title="Delete Event">
                             <Trash2 className="w-3.5 h-3.5 text-red-500" />
                           </button>
@@ -789,25 +791,31 @@ function CommunityAdminEvents() {
                           </span>
                         </td>
                         <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
-                          <button 
-                            onClick={() => handleUpdateRegStatus(r.id, "Present")}
-                            className="px-2 py-1 rounded bg-green-50 hover:bg-green-100 text-green-700 font-bold text-[10px] transition border border-green-200"
-                          >
-                            Present
-                          </button>
-                          <button 
-                            onClick={() => handleUpdateRegStatus(r.id, "Absent")}
-                            className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-600 font-bold text-[10px] transition border border-red-200"
-                          >
-                            Absent
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteReg(r.id, r.attendees)}
-                            className="p-1 rounded bg-red-50 text-red-500 hover:bg-red-100 transition inline-flex items-center"
-                            title="Remove registration"
-                          >
-                            <Trash className="w-3.5 h-3.5" />
-                          </button>
+                          {perms.edit && (
+                            <>
+                              <button 
+                                onClick={() => handleUpdateRegStatus(r.id, "Present")}
+                                className="px-2 py-1 rounded bg-green-50 hover:bg-green-100 text-green-700 font-bold text-[10px] transition border border-green-200"
+                              >
+                                Present
+                              </button>
+                              <button 
+                                onClick={() => handleUpdateRegStatus(r.id, "Absent")}
+                                className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-600 font-bold text-[10px] transition border border-red-200"
+                              >
+                                Absent
+                              </button>
+                            </>
+                          )}
+                          {perms.delete && (
+                            <button 
+                              onClick={() => handleDeleteReg(r.id, r.attendees)}
+                              className="p-1 rounded bg-red-50 text-red-500 hover:bg-red-100 transition inline-flex items-center"
+                              title="Remove registration"
+                            >
+                              <Trash className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))

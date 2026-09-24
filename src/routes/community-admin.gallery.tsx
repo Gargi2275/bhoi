@@ -6,6 +6,7 @@ import { AnimatedCard } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 export const Route = createFileRoute("/community-admin/gallery")({
   component: CommunityAdminGallery,
@@ -13,6 +14,7 @@ export const Route = createFileRoute("/community-admin/gallery")({
 
 function CommunityAdminGallery() {
   const { user } = useAuth();
+  const perms = useModulePermissions("gallery");
   const [photos, setPhotos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -106,7 +108,7 @@ function CommunityAdminGallery() {
 
   return (
     <PageWrap title="Gallery" desc="Community photo albums">
-      {hasPermission(user, ["Upload Photos"]) && (
+      {hasPermission(user, ["Upload Photos"]) && perms.create && (
         <label className="block border-2 border-dashed border-warm rounded-2xl p-10 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition bg-surface mb-6 relative">
           {uploading ? (
             <div className="flex flex-col items-center">
@@ -139,7 +141,7 @@ function CommunityAdminGallery() {
                   <ImageIcon className="w-10 h-10 text-warm-muted" />
                 </div>
               )}
-              {hasPermission(user, ["Delete Photos"]) && (
+              {hasPermission(user, ["Delete Photos"]) && perms.delete && (
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button 
                     onClick={() => handleDelete(p.id)}

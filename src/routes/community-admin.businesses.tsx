@@ -10,6 +10,7 @@ import { AnimatedCard, Modal, StatusBadge } from "@/components/wag/primitives";
 import { cn, hasPermission } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { api, getImageUrl } from "@/lib/api";
+import { useModulePermissions } from "./community-admin";
 
 const CATEGORIES = [
   "Food & Bakery", "Manufacturing", "Jewellery", "Healthcare",
@@ -54,6 +55,7 @@ function blankForm() {
 export const Route = createFileRoute("/community-admin/businesses")({
   component: () => {
     const { user } = useAuth();
+    const perms = useModulePermissions("business");
     const [businesses, setBusinesses] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [open, setOpen] = useState(false);
@@ -281,7 +283,7 @@ export const Route = createFileRoute("/community-admin/businesses")({
         title="Samaj Business Manager"
         desc="Administer community directory listings, verify member shops, and spotlight premium partners."
         action={
-          hasPermission(user, ["Add Businesses"]) ? (
+          hasPermission(user, ["Add Businesses"]) && perms.create ? (
             <button onClick={openCreate} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 hover:bg-primary/95 transition shadow-sm">
               <Plus className="w-4 h-4" /> Add Business
             </button>
@@ -399,7 +401,7 @@ export const Route = createFileRoute("/community-admin/businesses")({
                         {/* Actions */}
                         <td className="p-3.5">
                           <div className="flex items-center gap-1.5">
-                            {hasPermission(user, ["Edit Businesses"]) && currentStatus === "PENDING" && (
+                            {hasPermission(user, ["Edit Businesses"]) && perms.edit && currentStatus === "PENDING" && (
                               <button
                                 onClick={() => handleApprove(b.id)}
                                 className="p-2 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition"
@@ -408,12 +410,12 @@ export const Route = createFileRoute("/community-admin/businesses")({
                                 <Check className="w-4 h-4" />
                               </button>
                             )}
-                            {hasPermission(user, ["Edit Businesses"]) && (
+                            {hasPermission(user, ["Edit Businesses"]) && perms.edit && (
                               <button onClick={() => openEdit(b)} className="p-2 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 transition">
                                 <Edit className="w-4 h-4" />
                               </button>
                             )}
-                            {hasPermission(user, ["Delete Businesses"]) && (
+                            {hasPermission(user, ["Delete Businesses"]) && perms.delete && (
                               <button onClick={() => handleDelete(b.id)} className="p-2 rounded-xl bg-red-50 text-red-500 hover:bg-red-100 transition">
                                 <Trash2 className="w-4 h-4" />
                               </button>

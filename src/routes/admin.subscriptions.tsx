@@ -10,22 +10,19 @@ import {
   AlertCircle
 } from "lucide-react";
 
-const COMMUNITY_ADMIN_MODULE_CODES = [
+const COMMUNITY_ADMIN_SIDEBAR_CODES = [
   "dashboard",
   "subsidiaries",
   "hierarchy",
   "members",
   "committee",
-  "families",
   "family",
   "events",
   "news",
   "gallery",
   "donations",
   "venues",
-  "properties",
   "jobs",
-  "businesses",
   "business",
   "matrimony",
   "reports",
@@ -54,6 +51,7 @@ function AdminSubscriptionsPage() {
   const [communities, setCommunities] = useState<any[]>([]);
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [features, setFeatures] = useState<any[]>([]);
+  const [allFeatures, setAllFeatures] = useState<any[]>([]);
   const [addons, setAddons] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -82,7 +80,7 @@ function AdminSubscriptionsPage() {
     description: "",
     price: 0,
     billing_cycle: "Monthly",
-    limit_type: "extra_members",
+    target_limit: "max_members",
     limit_value: 0,
     active: true
   });
@@ -153,21 +151,33 @@ function AdminSubscriptionsPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [plansData, subsData, featuresData, addonsData, historyData, auditData] = await Promise.all([
+      const [plansData, subsData, featuresData, addonsData, historyData, auditData, sidebarMods] = await Promise.all([
         api.getPlans(),
         api.getCommunitySubscriptions(),
         api.getFeatures(),
         api.getPlanAddons(),
         api.getSubscriptionHistory(),
-        api.getSubscriptionAuditLogs()
+        api.getSubscriptionAuditLogs(),
+        api.getSidebarModules().catch(() => [])
       ]);
       
       setPlans(plansData || []);
       setSubscriptions(subsData || []);
-      const filteredFeatures = (featuresData || []).filter((feat: any) => 
-        COMMUNITY_ADMIN_MODULE_CODES.includes(feat.code.toLowerCase())
-      );
+      setAllFeatures(featuresData || []);
+
+      const sidebarCodes = new Set((sidebarMods || []).map((m: any) => m.module_code.toLowerCase()));
+      const filteredFeatures = (featuresData || []).filter((feat: any) => {
+        const code = feat.code.toLowerCase();
+        if (!COMMUNITY_ADMIN_SIDEBAR_CODES.includes(code)) return false;
+        // Check if this code or its aliases are active in getSidebarModules
+        if (code === "family") return sidebarCodes.has("family") || sidebarCodes.has("families");
+        if (code === "business") return sidebarCodes.has("business") || sidebarCodes.has("businesses");
+        if (code === "venues") return sidebarCodes.has("venues") || sidebarCodes.has("properties");
+        if (code === "plans") return sidebarCodes.has("plans") || sidebarCodes.has("plan");
+        return sidebarCodes.has(code);
+      });
       setFeatures(filteredFeatures);
+
       setAddons(addonsData || []);
       setHistory(historyData || []);
       setAuditLogs(auditData || []);
@@ -235,6 +245,7 @@ function AdminSubscriptionsPage() {
       feature_id: feat.id,
       feature_code: feat.code,
       feature_name: feat.name,
+      allowed_operations: [],
       can_view: feat.code === "dashboard" || feat.code === "members",
       can_create: false,
       can_edit: false,
@@ -253,6 +264,17 @@ function AdminSubscriptionsPage() {
 
   const handleEditPlan = (plan: any) => {
     setCurrentPlan(plan);
+    const activeFeatures = plan.modules?.active_features || [];
+    const cleanActiveFeatures = activeFeatures.map((code: string) => {
+      const c = code.toLowerCase();
+      if (c === "families") return "family";
+      if (c === "businesses") return "business";
+      if (c === "properties" || c === "property_booking") return "venues";
+      if (c === "plan" || c === "subscriptions" || c === "community_subscription") return "plans";
+      return c;
+    });
+    const uniqueCleanFeatures = Array.from(new Set(cleanActiveFeatures));
+
     setPlanForm({
       name: plan.name || "",
       code: plan.code || "",
@@ -298,17 +320,31 @@ function AdminSubscriptionsPage() {
       custom_sms_templates: plan.custom_sms_templates || false,
       custom_whatsapp: plan.custom_whatsapp || false,
       custom_theme: plan.custom_theme || false,
-      modules: plan.modules || {},
+      modules: {
+        ...(plan.modules || {}),
+        active_features: uniqueCleanFeatures
+      },
     });
     
     const perms = features.map(feat => {
+      const codesToSearch = [
+        feat.code.toLowerCase(),
+        ...(feat.code.toLowerCase() === "family" ? ["families"] :
+            feat.code.toLowerCase() === "business" ? ["businesses"] :
+            feat.code.toLowerCase() === "venues" ? ["properties", "property_booking"] :
+            feat.code.toLowerCase() === "plans" ? ["plan", "subscriptions", "community_subscription"] : [])
+      ];
       const existing = plan.feature_permissions?.find(
-        (p: any) => p.feature === feat.id || p.feature?.id === feat.id || p.feature_code === feat.code
+        (p: any) => {
+          const pCode = (p.feature_code || p.feature?.code || "").toLowerCase();
+          return p.feature === feat.id || p.feature?.id === feat.id || codesToSearch.includes(pCode);
+        }
       );
       return {
         feature_id: feat.id,
         feature_code: feat.code,
         feature_name: feat.name,
+        allowed_operations: existing?.allowed_operations || [],
         can_view: existing?.can_view || false,
         can_create: existing?.can_create || false,
         can_edit: existing?.can_edit || false,
@@ -329,18 +365,34 @@ function AdminSubscriptionsPage() {
   const handleSavePlan = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const activeFeatures = planForm.modules?.active_features || [];
+      const expandedFeatures = [...activeFeatures];
+      if (activeFeatures.includes("family")) expandedFeatures.push("families");
+      if (activeFeatures.includes("business")) expandedFeatures.push("businesses");
+      if (activeFeatures.includes("venues")) expandedFeatures.push("properties", "property_booking");
+      if (activeFeatures.includes("plans")) expandedFeatures.push("plan", "subscriptions", "community_subscription");
+
+      const planToSave = {
+        ...planForm,
+        modules: {
+          ...(planForm.modules || {}),
+          active_features: expandedFeatures
+        }
+      };
+
       let savedPlan;
       if (currentPlan) {
-        savedPlan = await api.updatePlan(currentPlan.id, planForm);
+        savedPlan = await api.updatePlan(currentPlan.id, planToSave);
       } else {
-        savedPlan = await api.createPlan(planForm);
+        savedPlan = await api.createPlan(planToSave);
       }
       
-      const activeFeatures = planForm.modules?.active_features || [];
-      const permsToSave = wizardPermissions.map(wp => {
+      const permsToSave: any[] = [];
+      wizardPermissions.forEach(wp => {
         const isActive = activeFeatures.includes(wp.feature_code);
-        return {
+        const permObj = {
           ...wp,
+          allowed_operations: isActive ? wp.allowed_operations || [] : [],
           can_view: isActive ? wp.can_view : false,
           can_create: isActive ? wp.can_create : false,
           can_edit: isActive ? wp.can_edit : false,
@@ -352,6 +404,29 @@ function AdminSubscriptionsPage() {
           can_assign: isActive ? wp.can_assign : false,
           can_manage: isActive ? wp.can_manage : false,
         };
+        permsToSave.push(permObj);
+
+        const aliasMap: Record<string, string[]> = {
+          family: ["families"],
+          business: ["businesses"],
+          venues: ["properties", "property_booking"],
+          plans: ["plan", "subscriptions", "community_subscription"]
+        };
+
+        const aliases = aliasMap[wp.feature_code];
+        if (aliases) {
+          aliases.forEach(aliasCode => {
+            const aliasFeat = allFeatures.find(f => f.code.toLowerCase() === aliasCode);
+            if (aliasFeat) {
+              permsToSave.push({
+                ...permObj,
+                feature_id: aliasFeat.id,
+                feature_code: aliasFeat.code,
+                feature_name: aliasFeat.name
+              });
+            }
+          });
+        }
       });
       await api.updatePlanPermissions(savedPlan.id, permsToSave);
       
@@ -398,11 +473,24 @@ function AdminSubscriptionsPage() {
     setPermissionDrawerOpen(true);
     // Prepare list of feature permissions for this plan
     const perms = features.map(feat => {
-      const existing = plan.feature_permissions?.find((p: any) => p.feature === feat.id || p.feature?.id === feat.id);
+      const codesToSearch = [
+        feat.code.toLowerCase(),
+        ...(feat.code.toLowerCase() === "family" ? ["families"] :
+            feat.code.toLowerCase() === "business" ? ["businesses"] :
+            feat.code.toLowerCase() === "venues" ? ["properties", "property_booking"] :
+            feat.code.toLowerCase() === "plans" ? ["plan", "subscriptions", "community_subscription"] : [])
+      ];
+      const existing = plan.feature_permissions?.find(
+        (p: any) => {
+          const pCode = (p.feature_code || p.feature?.code || "").toLowerCase();
+          return p.feature === feat.id || p.feature?.id === feat.id || codesToSearch.includes(pCode);
+        }
+      );
       return {
         feature_id: feat.id,
         name: feat.name,
         code: feat.code,
+        allowed_operations: existing?.allowed_operations || [],
         can_view: existing?.can_view || false,
         can_create: existing?.can_create || false,
         can_edit: existing?.can_edit || false,
@@ -418,18 +506,52 @@ function AdminSubscriptionsPage() {
     setPlanPermissions(perms);
   };
 
-  const handleTogglePermission = (index: number, key: string) => {
+  const handleTogglePermission = (index: number, opCode: string) => {
     const updated = [...planPermissions];
+    const currentOps = updated[index].allowed_operations || [];
+    let nextOps;
+    if (currentOps.includes(opCode)) {
+      nextOps = currentOps.filter((c: string) => c !== opCode);
+    } else {
+      nextOps = [...currentOps, opCode];
+    }
     updated[index] = {
       ...updated[index],
-      [key]: !updated[index][key]
+      allowed_operations: nextOps,
+      can_view: nextOps.some((op: string) => op.includes("view") || op.includes("read")),
     };
     setPlanPermissions(updated);
   };
 
   const handleSavePermissions = async () => {
     try {
-      await api.updatePlanPermissions(selectedPlanForPerms.id, planPermissions);
+      const permsToSave: any[] = [];
+      planPermissions.forEach(perm => {
+        permsToSave.push(perm);
+
+        const aliasMap: Record<string, string[]> = {
+          family: ["families"],
+          business: ["businesses"],
+          venues: ["properties", "property_booking"],
+          plans: ["plan", "subscriptions", "community_subscription"]
+        };
+
+        const aliases = aliasMap[perm.code];
+        if (aliases) {
+          aliases.forEach(aliasCode => {
+            const aliasFeat = allFeatures.find(f => f.code.toLowerCase() === aliasCode);
+            if (aliasFeat) {
+              permsToSave.push({
+                ...perm,
+                feature_id: aliasFeat.id,
+                name: aliasFeat.name,
+                code: aliasFeat.code
+              });
+            }
+          });
+        }
+      });
+      await api.updatePlanPermissions(selectedPlanForPerms.id, permsToSave);
       setPermissionDrawerOpen(false);
       fetchData();
     } catch (err) {
@@ -559,7 +681,7 @@ function AdminSubscriptionsPage() {
         description: "",
         price: 0,
         billing_cycle: "Monthly",
-        limit_type: "extra_members",
+        target_limit: "max_members",
         limit_value: 0,
         active: true
       });
@@ -1281,8 +1403,7 @@ function AdminSubscriptionsPage() {
                     { step: 4, label: "Limits & Quotas", desc: "Capacity Constraints" },
                     { step: 5, label: "Permissions Matrix", desc: "Granular Action Matrix" },
                     { step: 6, label: "Purchasable Add-ons", desc: "Feature Extensions" },
-                    { step: 7, label: "Renewal Policies", desc: "Trial & Advanced Flags" },
-                    { step: 8, label: "Review & Publish", desc: "Live Activation" }
+                    { step: 7, label: "Review & Publish", desc: "Live Activation" }
                   ].map((s) => {
                     const isActive = wizardStep === s.step;
                     const isCompleted = wizardStep > s.step;
@@ -1514,9 +1635,14 @@ function AdminSubscriptionsPage() {
                                 {planForm.currency === "INR" ? "₹" : planForm.currency === "USD" ? "$" : planForm.currency === "EUR" ? "€" : "£"}
                               </span>
                               <input 
-                                type="number" 
-                                value={planForm[cycle.key]} 
-                                onChange={e => setPlanForm({...planForm, [cycle.key]: parseInt(e.target.value) || 0})}
+                                type="text"
+                                inputMode="numeric"
+                                value={planForm[cycle.key] === 0 ? "" : planForm[cycle.key]}
+                                onChange={e => {
+                                  const raw = e.target.value.replace(/[^0-9]/g, "");
+                                  setPlanForm({...planForm, [cycle.key]: raw === "" ? 0 : parseInt(raw)});
+                                }}
+                                placeholder="0"
                                 className="w-full p-1.5 pl-7 pr-2 bg-surface border border-warm rounded-lg text-right font-bold text-foreground focus:border-primary focus:outline-none"
                               />
                             </div>
@@ -1685,86 +1811,6 @@ function AdminSubscriptionsPage() {
                         </div>
                       </div>
 
-                      {/* FEATURE SPECIFIC QUOTAS */}
-                      <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-4">
-                        <h4 className="font-bold text-sm text-[#3E2723] flex items-center gap-1.5"><Activity className="w-4 h-4 text-primary" /> Enabled Module Quotas</h4>
-                        
-                        {(!planForm.modules?.active_features || planForm.modules?.active_features.length === 0) ? (
-                          <p className="text-[11px] text-warm-muted">No features enabled in Step 3. Go back to enable modules to configure limits here.</p>
-                        ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {planForm.modules.active_features.map((code: string) => {
-                              const featureName = features.find(f => f.code === code)?.name || code;
-                              return (
-                                <div key={code} className="flex justify-between items-center gap-4 bg-surface p-3 border border-warm rounded-xl">
-                                  <div>
-                                    <p className="font-bold text-foreground text-[11px]">{featureName} Limit</p>
-                                    <p className="text-[9px] text-warm-muted">Set maximum allowed count</p>
-                                  </div>
-                                  <input 
-                                    type="number"
-                                    value={getModuleLimitValue(code)}
-                                    onChange={e => handleSetModuleLimit(code, parseInt(e.target.value) || 0)}
-                                    className="p-1.5 border border-warm rounded-lg w-28 text-right font-bold text-foreground focus:border-primary focus:outline-none"
-                                  />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* CREDITS & COMMUNICATION */}
-                      <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-4">
-                        <h4 className="font-bold text-sm text-[#3E2723] flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-primary" /> Communication & API Credits</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="space-y-1">
-                            <label className="font-bold text-warm-muted">SMS credits / month</label>
-                            <input 
-                              type="number" 
-                              value={planForm.max_sms} 
-                              onChange={e => setPlanForm({...planForm, max_sms: parseInt(e.target.value) || 0})}
-                              className="w-full p-2 bg-surface border border-warm rounded-lg focus:border-primary"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="font-bold text-warm-muted">Email credits / month</label>
-                            <input 
-                              type="number" 
-                              value={planForm.max_email_credits} 
-                              onChange={e => setPlanForm({...planForm, max_email_credits: parseInt(e.target.value) || 0})}
-                              className="w-full p-2 bg-surface border border-warm rounded-lg focus:border-primary"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="font-bold text-warm-muted">WhatsApp credits / month</label>
-                            <input 
-                              type="number" 
-                              value={planForm.max_whatsapp_credits} 
-                              onChange={e => setPlanForm({...planForm, max_whatsapp_credits: parseInt(e.target.value) || 0})}
-                              className="w-full p-2 bg-surface border border-warm rounded-lg focus:border-primary"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="font-bold text-warm-muted">API requests / month</label>
-                            <input 
-                              type="number" 
-                              value={planForm.max_api_calls} 
-                              onChange={e => setPlanForm({...planForm, max_api_calls: parseInt(e.target.value) || 0})}
-                              className="w-full p-2 bg-surface border border-warm rounded-lg focus:border-primary"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="font-bold text-warm-muted">Push Notifications Limit</label>
-                            <input 
-                              type="number" 
-                              value={planForm.max_notifications} 
-                              onChange={e => setPlanForm({...planForm, max_notifications: parseInt(e.target.value) || 0})}
-                              className="w-full p-2 bg-surface border border-warm rounded-lg focus:border-primary"
-                            />
-                          </div>
-                        </div>
-                      </div>
 
                     </div>
                   </div>
@@ -1789,21 +1835,10 @@ function AdminSubscriptionsPage() {
                           .filter(perm => planForm.modules?.active_features?.includes(perm.feature_code))
                           .map((perm, idx) => {
                             const actualIdx = wizardPermissions.findIndex(wp => wp.feature_id === perm.feature_id);
-                            
-                            const actions = [
-                              { key: "can_view", label: "View" },
-                              { key: "can_create", label: "Create" },
-                              { key: "can_edit", label: "Edit" },
-                              { key: "can_delete", label: "Delete" },
-                              { key: "can_export", label: "Export" },
-                              { key: "can_import", label: "Import" },
-                              { key: "can_approve", label: "Approve" },
-                              { key: "can_reject", label: "Reject" },
-                              { key: "can_assign", label: "Assign" },
-                              { key: "can_manage", label: "Manage" }
-                            ];
-                            
-                            const allowedCount = actions.filter(act => !!perm[act.key]).length;
+                            const featureObj = features.find(f => f.code === perm.feature_code || f.id === perm.feature_id);
+                            const actions = featureObj?.permission_definitions || [];
+                            const allowedOps = perm.allowed_operations || [];
+                            const allowedCount = actions.filter((act: any) => allowedOps.includes(act.code)).length;
 
                             return (
                               <div key={perm.feature_id} className="border border-warm rounded-2xl overflow-hidden bg-surface">
@@ -1813,7 +1848,7 @@ function AdminSubscriptionsPage() {
                                       {perm.feature_name}
                                       <span className="text-[9px] font-mono bg-warm/30 text-warm-muted px-1.5 py-0.5 rounded uppercase">{perm.feature_code}</span>
                                     </h4>
-                                    <p className="text-[9px] text-warm-muted mt-0.5">Active capabilities: {allowedCount}/10 actions enabled</p>
+                                    <p className="text-[9px] text-warm-muted mt-0.5">Active capabilities: {allowedCount}/{actions.length} actions enabled</p>
                                   </div>
 
                                   <div className="flex gap-2">
@@ -1823,9 +1858,7 @@ function AdminSubscriptionsPage() {
                                         const updated = [...wizardPermissions];
                                         updated[actualIdx] = {
                                           ...updated[actualIdx],
-                                          can_view: true, can_create: true, can_edit: true, can_delete: true,
-                                          can_export: true, can_import: true, can_approve: true, can_reject: true,
-                                          can_assign: true, can_manage: true
+                                          allowed_operations: actions.map((act: any) => act.code)
                                         };
                                         setWizardPermissions(updated);
                                       }}
@@ -1839,9 +1872,7 @@ function AdminSubscriptionsPage() {
                                         const updated = [...wizardPermissions];
                                         updated[actualIdx] = {
                                           ...updated[actualIdx],
-                                          can_view: false, can_create: false, can_edit: false, can_delete: false,
-                                          can_export: false, can_import: false, can_approve: false, can_reject: false,
-                                          can_assign: false, can_manage: false
+                                          allowed_operations: []
                                         };
                                         setWizardPermissions(updated);
                                       }}
@@ -1852,26 +1883,42 @@ function AdminSubscriptionsPage() {
                                   </div>
                                 </div>
 
-                                <div className="p-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
-                                  {actions.map(act => (
-                                    <label key={act.key} className="flex items-center gap-2 p-2 bg-sand/5 border border-warm rounded-lg hover:bg-sand/15 transition cursor-pointer">
-                                      <input 
-                                        type="checkbox"
-                                        checked={!!perm[act.key]}
-                                        onChange={() => {
-                                          const updated = [...wizardPermissions];
-                                          updated[actualIdx] = {
-                                            ...updated[actualIdx],
-                                            [act.key]: !updated[actualIdx][act.key]
-                                          };
-                                          setWizardPermissions(updated);
-                                        }}
-                                        className="rounded border-warm text-primary focus:ring-primary w-3.5 h-3.5"
-                                      />
-                                      <span className="font-bold text-[10px] text-foreground">{act.label}</span>
-                                    </label>
-                                  ))}
-                                </div>
+                                {actions.length === 0 ? (
+                                  <div className="p-4 text-center text-[10px] text-warm-muted">
+                                    No dynamic permissions registered for this module.
+                                  </div>
+                                ) : (
+                                  <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                    {actions.map((act: any) => {
+                                      const isChecked = allowedOps.includes(act.code);
+                                      return (
+                                        <label key={act.code} className="flex items-center gap-2 p-2 bg-sand/5 border border-warm rounded-lg hover:bg-sand/15 transition cursor-pointer">
+                                          <input 
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => {
+                                              const updated = [...wizardPermissions];
+                                              const currentOps = updated[actualIdx].allowed_operations || [];
+                                              let nextOps;
+                                              if (isChecked) {
+                                                nextOps = currentOps.filter((c: string) => c !== act.code);
+                                              } else {
+                                                nextOps = [...currentOps, act.code];
+                                              }
+                                              updated[actualIdx] = {
+                                                ...updated[actualIdx],
+                                                allowed_operations: nextOps
+                                              };
+                                              setWizardPermissions(updated);
+                                            }}
+                                            className="rounded border-warm text-primary focus:ring-primary w-3.5 h-3.5"
+                                          />
+                                          <span className="font-bold text-[10px] text-foreground">{act.name}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -1898,7 +1945,7 @@ function AdminSubscriptionsPage() {
                             description: "",
                             price: 0,
                             billing_cycle: "Monthly",
-                            limit_type: "extra_members",
+                            target_limit: "max_members",
                             limit_value: 0,
                             active: true
                           });
@@ -1934,7 +1981,7 @@ function AdminSubscriptionsPage() {
                                 <p className="text-[10px] text-warm-muted">{addon.description || "Provides extended resource capability limits for subscriber community."}</p>
                                 <div className="flex items-center gap-2 pt-1">
                                   <span className="text-[9px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                                    +{addon.limit_value} {addon.limit_type.replace("extra_", "").toUpperCase()}
+                                    +{addon.limit_value} {(addon.target_limit || addon.limit_type || "").replace("max_", "").replace(/_/g, " ").toUpperCase()}
                                   </span>
                                   <span className="text-[9px] font-semibold text-warm-muted">
                                     {addon.billing_cycle} cycle
@@ -1963,84 +2010,11 @@ function AdminSubscriptionsPage() {
                   </div>
                 )}
 
-                {/* STEP 7: RENEWAL & BILLING POLICIES */}
+                {/* STEP 7: REVIEW & PUBLISH */}
                 {wizardStep === 7 && (
-                  <div className="space-y-6 max-w-3xl animate-fadeIn">
-                    <div className="border-b border-warm pb-3">
-                      <h3 className="text-base font-black text-[#3E2723] flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-primary" /> Policies & Customizations</h3>
-                      <p className="text-warm-muted text-[10px]">Define trial, grace periods for suspension, and lock down premium customization capabilities.</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      
-                      {/* POLICIES */}
-                      <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-4">
-                        <h4 className="font-bold text-sm text-[#3E2723]">Renewal & Suspension Policies</h4>
-                        
-                        <div className="space-y-1">
-                          <label className="font-bold text-foreground">Trial Duration (Days)</label>
-                          <input 
-                            type="number" 
-                            value={planForm.trial_days} 
-                            onChange={e => setPlanForm({...planForm, trial_days: parseInt(e.target.value) || 0})}
-                            className="w-full p-2.5 bg-surface border border-warm rounded-xl focus:border-primary text-xs"
-                          />
-                          <p className="text-[9px] text-warm-muted">Free trial duration before community subscription requires payment.</p>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="font-bold text-foreground">Grace Period (Days)</label>
-                          <input 
-                            type="number" 
-                            value={planForm.grace_period_days} 
-                            onChange={e => setPlanForm({...planForm, grace_period_days: parseInt(e.target.value) || 0})}
-                            className="w-full p-2.5 bg-surface border border-warm rounded-xl focus:border-primary text-xs"
-                          />
-                          <p className="text-[9px] text-warm-muted">Grace days allowed to pay unpaid renewal invoices before account suspension.</p>
-                        </div>
-                      </div>
-
-                      {/* PREMIUM FLAGS */}
-                      <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-4">
-                        <h4 className="font-bold text-sm text-[#3E2723]">Premium Branding & Customizations</h4>
-                        
-                        <div className="space-y-2">
-                          {[
-                            { key: "custom_branding", label: "Custom App Branding", desc: "Allow custom colors & styles" },
-                            { key: "community_logo", label: "Community Logo upload", desc: "Allow custom logo override" },
-                            { key: "domain_mapping", label: "Custom Domain Mapping", desc: "Bind tenant site to custom URLs" },
-                            { key: "white_label", label: "White-label portal", desc: "Completely strip platform footer" },
-                            { key: "custom_login", label: "Custom Login Portal", desc: "Allows dedicated login portal UI" },
-                            { key: "custom_email_templates", label: "Custom Email Templates", desc: "Send custom transactional emails" },
-                            { key: "custom_sms_templates", label: "Custom SMS Templates", desc: "Send custom localized SMS updates" },
-                            { key: "custom_whatsapp", label: "Custom WhatsApp Integrations", desc: "Configure custom Twilio/WABA" },
-                            { key: "custom_theme", label: "Custom Layout Themes", desc: "Allows editing custom CSS rules" }
-                          ].map(flag => (
-                            <label key={flag.key} className="flex items-center justify-between p-2 hover:bg-sand/15 transition rounded-xl cursor-pointer">
-                              <div>
-                                <p className="font-bold text-foreground text-[11px]">{flag.label}</p>
-                                <p className="text-[9px] text-warm-muted">{flag.desc}</p>
-                              </div>
-                              <input 
-                                type="checkbox" 
-                                checked={!!planForm[flag.key]}
-                                onChange={e => setPlanForm({...planForm, [flag.key]: e.target.checked})}
-                                className="rounded border-warm text-primary focus:ring-primary w-4 h-4"
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-                )}
-
-                {/* STEP 8: REVIEW & PUBLISH */}
-                {wizardStep === 8 && (
                   <div className="space-y-6 max-w-4xl animate-fadeIn">
-                    <div className="border-b border-warm pb-3">
-                      <h3 className="text-base font-black text-[#3E2723] flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-primary" /> Review & Publish Tiers</h3>
+                    <div className="border-b border-warm pb-4">
+                      <h3 className="text-base font-black text-[#3E2723] flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> Review & Publish Plan</h3>
                       <p className="text-warm-muted text-[10px]">Verify all configurations before writing them live to the multi-tenant database registry.</p>
                     </div>
 
@@ -2048,8 +2022,8 @@ function AdminSubscriptionsPage() {
                       
                       {/* CARD PREVIEW */}
                       <div className="space-y-3">
-                        <h4 className="font-bold text-[#3E2723]">Client Portal Card Preview</h4>
-                        <div className={`rounded-3xl p-5 border border-warm bg-gradient-to-br shadow-lg ${planForm.color_theme || "from-blue-650 to-indigo-700 bg-indigo-950 text-white"}`}>
+                        <h4 className="font-bold text-[#3E2723] text-xs uppercase tracking-wide">Client Portal Card Preview</h4>
+                        <div className={`rounded-3xl p-5 bg-gradient-to-br shadow-xl ${planForm.color_theme || "from-blue-600 to-indigo-700"}`}>
                           <div className="flex justify-between items-start">
                             <div>
                               {planForm.display_badge && (
@@ -2085,69 +2059,127 @@ function AdminSubscriptionsPage() {
 
                       {/* SUMMARY SPECS */}
                       <div className="md:col-span-2 space-y-4">
-                        <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-4">
-                          <h4 className="font-bold text-[#3E2723]">Architect Validation & Checklist</h4>
-                          
+
+                        {/* VALIDATION CHECKLIST */}
+                        <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-3">
+                          <h4 className="font-bold text-[#3E2723] text-xs flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-primary" /> Architect Validation Checklist</h4>
                           <div className="space-y-2">
-                            <div className="flex justify-between items-center p-2 bg-surface border border-warm rounded-xl">
-                              <span className="font-semibold text-foreground">Plan Title & Slug Code Defined</span>
-                              {planForm.name && planForm.code ? (
-                                <span className="text-teal-700 font-bold flex items-center gap-1"><Check className="w-4 h-4" /> Configured ({planForm.code})</span>
-                              ) : (
-                                <span className="text-red-700 font-bold flex items-center gap-1"><X className="w-4 h-4" /> Missing Title / Code</span>
-                              )}
-                            </div>
-
-                            <div className="flex justify-between items-center p-2 bg-surface border border-warm rounded-xl">
-                              <span className="font-semibold text-foreground">Active Billing Cycle Rates</span>
-                              {(planForm.monthly_price > 0 || planForm.yearly_price > 0 || planForm.lifetime_price > 0) ? (
-                                <span className="text-teal-700 font-bold flex items-center gap-1"><Check className="w-4 h-4" /> {planForm.currency} Cycles Active</span>
-                              ) : (
-                                <span className="text-amber-700 font-bold flex items-center gap-1"><AlertTriangle className="w-4 h-4" /> 0 / Free tier plan</span>
-                              )}
-                            </div>
-
-                            <div className="flex justify-between items-center p-2 bg-surface border border-warm rounded-xl">
-                              <span className="font-semibold text-foreground">Central Modules Enabled</span>
-                              {planForm.modules?.active_features?.length > 0 ? (
-                                <span className="text-teal-700 font-bold flex items-center gap-1"><Check className="w-4 h-4" /> {planForm.modules.active_features.length} Modules Allowed</span>
-                              ) : (
-                                <span className="text-red-700 font-bold flex items-center gap-1"><X className="w-4 h-4" /> 0 Enabled. Subscribers will get blank panel!</span>
-                              )}
-                            </div>
-
-                            <div className="flex justify-between items-center p-2 bg-surface border border-warm rounded-xl">
-                              <span className="font-semibold text-foreground">Linked Extensions (Add-ons)</span>
-                              {planForm.modules?.addon_ids?.length > 0 ? (
-                                <span className="text-teal-700 font-bold flex items-center gap-1"><Check className="w-4 h-4" /> {planForm.modules.addon_ids.length} Add-ons Associated</span>
-                              ) : (
-                                <span className="text-warm-muted font-bold">No linked add-ons</span>
-                              )}
-                            </div>
+                            {[
+                              {
+                                label: "Plan Title & Slug Code",
+                                ok: !!(planForm.name && planForm.code),
+                                okMsg: `✓ ${planForm.code}`,
+                                failMsg: "✗ Missing — go to Step 1"
+                              },
+                              {
+                                label: "Active Billing Rates",
+                                ok: planForm.monthly_price > 0 || planForm.yearly_price > 0 || planForm.lifetime_price > 0,
+                                okMsg: `✓ ${planForm.currency} cycles configured`,
+                                failMsg: "⚠ 0 — Free tier (OK if intentional)",
+                                warn: true
+                              },
+                              {
+                                label: "Application Modules",
+                                ok: (planForm.modules?.active_features?.length || 0) > 0,
+                                okMsg: `✓ ${planForm.modules?.active_features?.length} module(s) enabled`,
+                                failMsg: "✗ None — subscribers get blank panel"
+                              },
+                              {
+                                label: "Permissions Configured",
+                                ok: wizardPermissions.some(wp => planForm.modules?.active_features?.includes(wp.feature_code) && (wp.allowed_operations?.length > 0 || wp.can_view)),
+                                okMsg: "✓ At least one module has permissions",
+                                failMsg: "⚠ No actions granted — all features will be view-only",
+                                warn: true
+                              },
+                              {
+                                label: "Linked Add-ons",
+                                ok: (planForm.modules?.addon_ids?.length || 0) > 0,
+                                okMsg: `✓ ${planForm.modules?.addon_ids?.length} add-on(s) linked`,
+                                failMsg: "— None linked (optional)",
+                                warn: true
+                              }
+                            ].map((item, i) => (
+                              <div key={i} className={`flex justify-between items-center p-2.5 rounded-xl border ${
+                                item.ok ? "bg-emerald-50 border-emerald-200" :
+                                item.warn ? "bg-amber-50 border-amber-200" :
+                                "bg-red-50 border-red-200"
+                              }`}>
+                                <span className="font-semibold text-foreground text-[11px]">{item.label}</span>
+                                <span className={`font-bold text-[10px] ${
+                                  item.ok ? "text-emerald-700" : item.warn ? "text-amber-700" : "text-red-700"
+                                }`}>{item.ok ? item.okMsg : item.failMsg}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
 
-                        {/* FINAL SUMMARY OF SELECTED MODULES */}
+                        {/* PLAN SPEC SUMMARY */}
+                        <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-3">
+                          <h4 className="font-bold text-[#3E2723] text-xs flex items-center gap-2"><FileText className="w-4 h-4 text-primary" /> Plan Configuration Summary</h4>
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            {[
+                              { label: "Max Members", value: planForm.max_members?.toLocaleString() },
+                              { label: "Max Communities", value: planForm.max_communities },
+                              { label: "Max Family Members", value: planForm.max_family_members?.toLocaleString() },
+                              { label: "Max Storage", value: `${planForm.max_storage_gb} GB` },
+                              { label: "Trial Period", value: `${planForm.trial_days} days` },
+                              { label: "Grace Period", value: `${planForm.grace_period_days} days` },
+                              { label: "GST Rate", value: `${planForm.gst_percentage}%` },
+                              { label: "Discount", value: `${planForm.discount_percentage}%` }
+                            ].map((row, i) => (
+                              <div key={i} className="flex justify-between bg-surface border border-warm rounded-lg p-2">
+                                <span className="text-warm-muted font-medium">{row.label}</span>
+                                <span className="font-bold text-foreground">{row.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* ACTIVE MODULES TAGS */}
                         <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-2">
-                          <h4 className="font-bold text-[#3E2723]">Active Feature Sets & Permissions Count</h4>
+                          <h4 className="font-bold text-[#3E2723] text-xs flex items-center gap-2"><Activity className="w-4 h-4 text-primary" /> Active Module Registry</h4>
                           <div className="flex flex-wrap gap-2">
                             {(!planForm.modules?.active_features || planForm.modules?.active_features.length === 0) ? (
-                              <span className="text-[10px] text-warm-muted">None selected</span>
+                              <span className="text-[10px] text-warm-muted italic">No modules selected</span>
                             ) : (
                               planForm.modules.active_features.map((code: string) => {
                                 const featName = features.find(f => f.code === code)?.name || code;
                                 const permRecord = wizardPermissions.find(wp => wp.feature_code === code);
                                 const allowedActions = permRecord ? Object.keys(permRecord).filter(k => k.startsWith("can_") && !!permRecord[k]).length : 0;
                                 return (
-                                  <span key={code} className="bg-surface border border-warm px-2.5 py-1 rounded-xl text-[10px] font-bold text-foreground flex items-center gap-1">
+                                  <span key={code} className="bg-surface border border-emerald-200 bg-emerald-50 px-2.5 py-1 rounded-xl text-[10px] font-bold text-emerald-800 flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
                                     {featName}
-                                    <span className="bg-primary/20 text-primary-dark font-black px-1.5 py-0.5 rounded text-[8px]">{allowedActions} Action Capabilities</span>
+                                    {allowedActions > 0 && <span className="bg-emerald-200 text-emerald-900 font-black px-1.5 py-0.5 rounded text-[8px]">{allowedActions} ops</span>}
                                   </span>
                                 );
                               })
                             )}
                           </div>
                         </div>
+
+                        {/* PREMIUM BRANDING FLAGS */}
+                        {["custom_branding","community_logo","domain_mapping","white_label","custom_login"].some(k => planForm[k]) && (
+                          <div className="bg-sand/10 border border-warm rounded-2xl p-5 space-y-2">
+                            <h4 className="font-bold text-[#3E2723] text-xs flex items-center gap-2"><Key className="w-4 h-4 text-primary" /> Premium Capabilities Enabled</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                { key: "custom_branding", label: "Custom Branding" },
+                                { key: "community_logo", label: "Community Logo" },
+                                { key: "domain_mapping", label: "Domain Mapping" },
+                                { key: "white_label", label: "White Label" },
+                                { key: "custom_login", label: "Custom Login" },
+                                { key: "custom_email_templates", label: "Email Templates" },
+                                { key: "custom_sms_templates", label: "SMS Templates" },
+                                { key: "custom_whatsapp", label: "WhatsApp Integration" },
+                                { key: "custom_theme", label: "Custom Themes" }
+                              ].filter(f => planForm[f.key]).map(f => (
+                                <span key={f.key} className="bg-violet-50 border border-violet-200 text-violet-800 text-[10px] font-bold px-2.5 py-1 rounded-full">✓ {f.label}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                       </div>
 
                     </div>
@@ -2173,10 +2205,10 @@ function AdminSubscriptionsPage() {
                 <div className="w-56 h-1.5 bg-warm/30 rounded-full overflow-hidden">
                   <div 
                     className="bg-primary h-full transition-all duration-300 rounded-full" 
-                    style={{ width: `${(wizardStep / 8) * 100}%` }} 
+                    style={{ width: `${(wizardStep / 7) * 100}%` }} 
                   />
                 </div>
-                <span className="text-[10px] font-black text-foreground">{wizardStep} of 8</span>
+                <span className="text-[10px] font-black text-foreground">{wizardStep} of 7</span>
               </div>
 
               <div className="flex gap-2">
@@ -2189,7 +2221,7 @@ function AdminSubscriptionsPage() {
                   Previous Step
                 </button>
 
-                {wizardStep < 8 ? (
+                {wizardStep < 7 ? (
                   <button
                     type="button"
                     onClick={() => setWizardStep(prev => prev + 1)}
@@ -2200,7 +2232,7 @@ function AdminSubscriptionsPage() {
                 ) : (
                   <button
                     type="button"
-                    disabled={!planForm.name || !planForm.code || !planForm.modules?.active_features?.length}
+                    disabled={!planForm.name || !planForm.code || !(planForm.modules?.active_features?.length)}
                     onClick={handleSavePlan}
                     className="px-6 py-2 bg-[#1B5E20] hover:bg-[#1B5E20]/90 text-white rounded-xl font-black shadow-md shadow-green-950/20 transition disabled:opacity-40 disabled:pointer-events-none text-[11px]"
                   >
@@ -2288,20 +2320,18 @@ function AdminSubscriptionsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-foreground">Limit Type</label>
+                  <label className="font-bold text-foreground">Target Quota Limit</label>
                   <select 
-                    value={addonForm.limit_type}
-                    onChange={e => setAddonForm({...addonForm, limit_type: e.target.value})}
+                    value={addonForm.target_limit}
+                    onChange={e => setAddonForm({...addonForm, target_limit: e.target.value})}
                     className="w-full p-2 bg-sand/15 border border-warm rounded-lg text-xs"
                   >
-                    <option value="extra_members">Extra Members</option>
-                    <option value="extra_storage">Extra Storage (GB)</option>
-                    <option value="extra_sms">Extra SMS Credits</option>
-                    <option value="extra_email">Extra Email Credits</option>
-                    <option value="extra_whatsapp">Extra WhatsApp Credits</option>
-                    <option value="extra_properties">Extra Properties/Venues</option>
-                    <option value="extra_ai_credits">Extra AI Credits</option>
-                    <option value="custom">Custom Quota</option>
+                    <option value="">-- Select Limit --</option>
+                    <option value="max_members">Extra Members</option>
+                    <option value="max_storage_gb">Extra Storage (GB)</option>
+                    <option value="max_family_members">Extra Family Members</option>
+                    <option value="max_committee_members">Extra Committee Members</option>
+                    <option value="max_communities">Extra Subsidiary Communities</option>
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -2489,51 +2519,76 @@ function AdminSubscriptionsPage() {
             </div>
 
             <div className="space-y-4">
-              {planPermissions.map((perm, idx) => (
-                <div key={perm.feature_id} className="border border-warm rounded-2xl p-4 bg-surface space-y-3">
-                  <div className="flex justify-between items-center border-b border-warm pb-2">
-                    <div>
-                      <h4 className="font-bold text-xs text-foreground">{perm.name}</h4>
-                      <p className="text-[10px] text-warm-muted font-mono font-semibold">{perm.code}</p>
-                    </div>
-                    <label className="flex items-center gap-1.5 font-bold text-[10px] text-foreground cursor-pointer">
-                      <input 
-                        type="checkbox" 
-                        checked={perm.can_view} 
-                        onChange={() => handleTogglePermission(idx, "can_view")}
-                        className="rounded border-warm text-primary focus:ring-primary"
-                      />
-                      Enable Module (View)
-                    </label>
-                  </div>
+              {planPermissions.map((perm, idx) => {
+                const featureObj = features.find(f => f.code === perm.code || f.id === perm.feature_id);
+                const actions = featureObj?.permission_definitions || [];
+                const allowedOps = perm.allowed_operations || [];
+                const allowedCount = actions.filter((act: any) => allowedOps.includes(act.code)).length;
 
-                  {perm.can_view && (
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 text-[10px] font-semibold text-foreground">
-                      {[
-                        { key: "can_create", label: "Create" },
-                        { key: "can_edit", label: "Edit" },
-                        { key: "can_delete", label: "Delete" },
-                        { key: "can_approve", label: "Approve" },
-                        { key: "can_reject", label: "Reject" },
-                        { key: "can_export", label: "Export" },
-                        { key: "can_import", label: "Import" },
-                        { key: "can_assign", label: "Assign" },
-                        { key: "can_manage", label: "Manage" }
-                      ].map(action => (
-                        <label key={action.key} className="flex items-center gap-1.5 cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={perm[action.key]} 
-                            onChange={() => handleTogglePermission(idx, action.key)}
-                            className="rounded border-warm text-primary focus:ring-primary"
-                          />
-                          {action.label}
-                        </label>
-                      ))}
+                return (
+                  <div key={perm.feature_id} className="border border-warm rounded-2xl p-4 bg-surface space-y-3">
+                    <div className="flex justify-between items-center border-b border-warm pb-2">
+                      <div>
+                        <h4 className="font-bold text-xs text-foreground">{perm.name}</h4>
+                        <p className="text-[10px] text-warm-muted font-mono font-semibold">{perm.code}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...planPermissions];
+                            updated[idx] = {
+                              ...updated[idx],
+                              allowed_operations: actions.map((act: any) => act.code)
+                            };
+                            setPlanPermissions(updated);
+                          }}
+                          className="px-2 py-0.5 text-[9px] font-bold border border-warm hover:bg-sand/30 rounded-lg text-foreground transition"
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...planPermissions];
+                            updated[idx] = {
+                              ...updated[idx],
+                              allowed_operations: []
+                            };
+                            setPlanPermissions(updated);
+                          }}
+                          className="px-2 py-0.5 text-[9px] font-bold border border-warm hover:bg-sand/30 rounded-lg text-foreground transition"
+                        >
+                          None
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {actions.length === 0 ? (
+                      <div className="text-[10px] text-warm-muted p-2 bg-sand/5 border border-warm border-dashed rounded-lg text-center">
+                        No dynamic permissions registered for this module.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-[10px] font-semibold text-foreground">
+                        {actions.map((act: any) => {
+                          const isChecked = allowedOps.includes(act.code);
+                          return (
+                            <label key={act.code} className="flex items-center gap-1.5 cursor-pointer p-1.5 bg-sand/5 border border-warm rounded-lg hover:bg-sand/15 transition">
+                              <input 
+                                type="checkbox" 
+                                checked={isChecked} 
+                                onChange={() => handleTogglePermission(idx, act.code)}
+                                className="rounded border-warm text-primary focus:ring-primary w-3.5 h-3.5"
+                              />
+                              {act.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

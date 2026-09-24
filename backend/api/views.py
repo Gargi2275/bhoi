@@ -107,7 +107,7 @@ from .models import (
     PartnerPreference, ProfileVisibility, InterestRequest, Wishlist, ProfileView,
     CommunityActivityLog, MatrimonyPhoto, MatrimonyAuditLog, JobApplication,
     FeatureMaster, PlanFeaturePermission, CommunitySubscription, SubscriptionHistory,
-    PlanAddon, FeatureUsage, SubscriptionAuditLog,
+    PlanAddon, FeatureUsage, SubscriptionAuditLog, SystemQuota,
     ApplicationModule, ApplicationAction, ModuleAction, ApplicationModuleAuditLog
 )
 from .serializers import (
@@ -122,7 +122,7 @@ from .serializers import (
     JobApplicationSerializer,
     FeatureMasterSerializer, PlanFeaturePermissionSerializer, CommunitySubscriptionSerializer,
     SubscriptionHistorySerializer, PlanAddonSerializer, FeatureUsageSerializer,
-    SubscriptionAuditLogSerializer,
+    SubscriptionAuditLogSerializer, SystemQuotaSerializer,
     ApplicationModuleSerializer, ApplicationActionSerializer, ModuleActionSerializer,
     ApplicationModuleAuditLogSerializer
 )
@@ -422,8 +422,220 @@ class HasCustomRolePermission(permissions.BasePermission):
         if member.role == 'super_admin':
             return True
 
-        if member.role == 'community_admin' and not member.custom_role:
-            return True
+        # Enforce Plan Feature Permissions for all community admins/committee members
+        if member.role == 'community_admin':
+            view_name = view.__class__.__name__
+            method = request.method
+            action = getattr(view, 'action', None)
+            
+            module_code = None
+            action_key = None
+
+            if view_name == 'MemberViewSet':
+                module_code = 'members'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    if action in ['approve', 'reject'] or 'aadhaar_status' in (request.data or {}):
+                        action_key = 'approve'
+                    else:
+                        action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'CommitteeViewSet':
+                module_code = 'committee'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name in ['FamilyViewSet', 'FamilyMemberViewSet']:
+                module_code = 'families'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name in ['EventViewSet', 'EventRegistrationViewSet']:
+                module_code = 'events'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'NewsViewSet':
+                module_code = 'news'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'GalleryViewSet':
+                module_code = 'gallery'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name in ['DonationViewSet', 'FundraisingCampaignViewSet']:
+                module_code = 'donations'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'JobViewSet':
+                module_code = 'jobs'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'BusinessViewSet':
+                module_code = 'businesses'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    if action in ['approve', 'reject'] or 'status' in (request.data or {}):
+                        action_key = 'approve'
+                    else:
+                        action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'MatrimonyProfileViewSet':
+                module_code = 'matrimony'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    if action in ['approve', 'reject'] or 'status' in (request.data or {}):
+                        action_key = 'approve'
+                    else:
+                        action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name in ['BookingPropertyViewSet', 'PropertyResourceViewSet']:
+                module_code = 'venues'
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    action_key = 'view'
+                elif method == 'POST':
+                    action_key = 'create'
+                elif method in ['PUT', 'PATCH']:
+                    action_key = 'edit'
+                elif method == 'DELETE':
+                    action_key = 'delete'
+
+            elif view_name == 'CommunityViewSet':
+                if method in ['GET', 'HEAD', 'OPTIONS']:
+                    module_code = 'settings'
+                    action_key = 'view'
+                elif method in ['PUT', 'PATCH']:
+                    module_code = 'settings'
+                    action_key = 'edit'
+                elif method == 'POST':
+                    module_code = 'subsidiaries'
+                    action_key = 'create'
+                elif method == 'DELETE':
+                    module_code = 'subsidiaries'
+                    action_key = 'delete'
+
+            if module_code and action_key:
+                from api.models import CommunitySubscription, SubscriptionPlan, FeatureMaster, PlanFeaturePermission
+                always_available_admin = {'dashboard', 'plans', 'plan', 'settings', 'subscriptions'}
+                if module_code not in always_available_admin:
+                    community = member.community
+                    if not community:
+                        return False
+                    sub = CommunitySubscription.objects.filter(community=community).first()
+                    if not sub:
+                        plan = SubscriptionPlan.objects.filter(code="basic").first()
+                        if not plan:
+                            plan = SubscriptionPlan.objects.first()
+                    else:
+                        plan = sub.plan
+                    
+                    if not plan:
+                        return False
+                        
+                    feature = FeatureMaster.objects.filter(code=module_code).first()
+                    if not feature:
+                        return False
+                        
+                    perm = PlanFeaturePermission.objects.filter(plan=plan, feature=feature).first()
+                    if not perm:
+                        return False
+                        
+                    from api.models import ModulePermissionDefinition
+                    registered_codes = list(ModulePermissionDefinition.objects.filter(feature=feature).values_list('code', flat=True))
+                    if registered_codes:
+                        ops = perm.allowed_operations or []
+                        if action_key == 'view':
+                            has_perm = any('view' in op or 'read' in op for op in ops)
+                        elif action_key == 'create':
+                            has_perm = any(any(k in op for k in ['create', 'add', 'upload', 'send', 'mark', 'generate', 'publish']) for op in ops)
+                        elif action_key == 'edit':
+                            has_perm = any(any(k in op for k in ['edit', 'update', 'modify', 'change', 'assign', 'reset', 'merge']) for op in ops)
+                        elif action_key == 'delete':
+                            has_perm = any(any(k in op for k in ['delete', 'remove', 'suspend', 'archive', 'cancel', 'reject']) for op in ops)
+                        else:
+                            has_perm = action_key in ops
+                        if not has_perm:
+                            return False
+                    else:
+                        field_map = {
+                            'view': 'can_view',
+                            'create': 'can_create',
+                            'edit': 'can_edit',
+                            'delete': 'can_delete',
+                            'export': 'can_export',
+                            'import': 'can_import',
+                            'approve': 'can_approve',
+                            'reject': 'can_reject',
+                            'assign': 'can_assign',
+                            'manage': 'can_manage'
+                        }
+                        field_name = field_map.get(action_key)
+                        if not field_name or not getattr(perm, field_name, False):
+                            return False
+
+            if not member.custom_role:
+                return True
 
         # If they are a committee member (role = community_admin and custom_role is set)
         if member.role == 'community_admin' and member.custom_role:
@@ -4914,6 +5126,7 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
             PlanFeaturePermission.objects.create(
                 plan=cloned_plan,
                 feature=perm.feature,
+                allowed_operations=perm.allowed_operations or [],
                 can_view=perm.can_view,
                 can_create=perm.can_create,
                 can_edit=perm.can_edit,
@@ -4965,10 +5178,17 @@ class SubscriptionPlanViewSet(viewsets.ModelViewSet):
                 continue
             feature = FeatureMaster.objects.get(pk=feature_id)
             perm, _ = PlanFeaturePermission.objects.get_or_create(plan=plan, feature=feature)
-            perm.can_view = p_data.get('can_view', False)
-            perm.can_create = p_data.get('can_create', False)
-            perm.can_edit = p_data.get('can_edit', False)
-            perm.can_delete = p_data.get('can_delete', False)
+            
+            # Update dynamic allowed_operations
+            allowed_ops = p_data.get('allowed_operations', [])
+            perm.allowed_operations = allowed_ops
+            
+            # Sync legacy fields for safety and backward compatibility
+            perm.can_view = any('view' in op or 'read' in op for op in allowed_ops) or (not allowed_ops and p_data.get('can_view', False))
+            perm.can_create = any(any(k in op for k in ['create', 'add', 'upload', 'send', 'mark', 'generate', 'publish']) for op in allowed_ops) or (not allowed_ops and p_data.get('can_create', False))
+            perm.can_edit = any(any(k in op for k in ['edit', 'update', 'modify', 'change', 'assign', 'reset', 'merge']) for op in allowed_ops) or (not allowed_ops and p_data.get('can_edit', False))
+            perm.can_delete = any(any(k in op for k in ['delete', 'remove', 'suspend', 'archive', 'cancel', 'reject']) for op in allowed_ops) or (not allowed_ops and p_data.get('can_delete', False))
+            
             perm.can_export = p_data.get('can_export', False)
             perm.can_import = p_data.get('can_import', False)
             perm.can_approve = p_data.get('can_approve', False)
@@ -5023,7 +5243,10 @@ def ensure_plans_seeded():
             "name": "Free",
             "description": "Standard free plan with basic limits",
             "monthly_price": 0,
+            "quarterly_price": 0,
+            "half_yearly_price": 0,
             "yearly_price": 0,
+            "lifetime_price": 0,
             "max_members": 50,
             "max_family_members": 200,
             "max_events": 5,
@@ -5040,7 +5263,10 @@ def ensure_plans_seeded():
             "name": "Basic",
             "description": "Basic subscription plan",
             "monthly_price": 499,
+            "quarterly_price": 1499,
+            "half_yearly_price": 2699,
             "yearly_price": 4999,
+            "lifetime_price": 15000,
             "max_members": 500,
             "max_family_members": 2000,
             "max_events": 20,
@@ -5082,6 +5308,189 @@ def ensure_plans_seeded():
             code=f["code"],
             defaults={"name": f["name"], "active": True}
         )
+
+    # Seed ModulePermissionDefinition for all core features
+    permission_catalog = {
+        "matrimony": [
+            ("view_profiles", "View Profiles"),
+            ("create_profile", "Create Profile"),
+            ("edit_profile", "Edit Profile"),
+            ("delete_profile", "Delete Profile"),
+            ("send_interest", "Send Interest"),
+            ("accept_interest", "Accept Interest"),
+            ("reject_interest", "Reject Interest"),
+            ("view_matches", "View Matches"),
+            ("unlock_contact", "Unlock Contact"),
+            ("download_biodata", "Download Biodata"),
+            ("ai_matching", "AI Matching"),
+            ("compatibility_report", "Compatibility Report"),
+            ("horoscope_match", "Horoscope Match"),
+            ("premium_match", "Premium Match"),
+            ("profile_highlight", "Profile Highlight"),
+        ],
+        "events": [
+            ("view_events", "View Events"),
+            ("create_event", "Create Event"),
+            ("edit_event", "Edit Event"),
+            ("delete_event", "Delete Event"),
+            ("publish_event", "Publish Event"),
+            ("cancel_event", "Cancel Event"),
+            ("approve_registration", "Approve Registration"),
+            ("reject_registration", "Reject Registration"),
+            ("scan_qr", "Scan QR"),
+            ("manage_bookings", "Manage Bookings"),
+            ("export_attendees", "Export Attendees"),
+            ("view_reports", "View Reports"),
+        ],
+        "committee": [
+            ("view_committee", "View Committee"),
+            ("create_committee", "Create Committee"),
+            ("edit_committee", "Edit Committee"),
+            ("delete_committee", "Delete Committee"),
+            ("assign_position", "Assign Position"),
+            ("remove_position", "Remove Position"),
+            ("approve_member", "Approve Member"),
+            ("reject_member", "Reject Member"),
+            ("manage_roles", "Manage Roles"),
+            ("manage_meetings", "Manage Meetings"),
+        ],
+        "members": [
+            ("view_members", "View Members"),
+            ("create_member", "Create Member"),
+            ("edit_member", "Edit Member"),
+            ("delete_member", "Delete Member"),
+            ("suspend_member", "Suspend Member"),
+            ("activate_member", "Activate Member"),
+            ("import_members", "Import Members"),
+            ("export_members", "Export Members"),
+            ("reset_password", "Reset Password"),
+            ("assign_role", "Assign Role"),
+            ("merge_duplicate_members", "Merge Duplicate Members"),
+        ],
+        "property_booking": [
+            ("view_properties", "View Properties"),
+            ("create_property", "Create Property"),
+            ("edit_property", "Edit Property"),
+            ("delete_property", "Delete Property"),
+            ("approve_booking", "Approve Booking"),
+            ("reject_booking", "Reject Booking"),
+            ("manage_availability", "Manage Availability"),
+            ("manage_pricing", "Manage Pricing"),
+            ("generate_invoice", "Generate Invoice"),
+            ("export_bookings", "Export Bookings"),
+        ],
+        "venues": [
+            ("view_properties", "View Properties"),
+            ("create_property", "Create Property"),
+            ("edit_property", "Edit Property"),
+            ("delete_property", "Delete Property"),
+            ("approve_booking", "Approve Booking"),
+            ("reject_booking", "Reject Booking"),
+            ("manage_availability", "Manage Availability"),
+            ("manage_pricing", "Manage Pricing"),
+            ("generate_invoice", "Generate Invoice"),
+            ("export_bookings", "Export Bookings"),
+        ],
+        "donations": [
+            ("view_donations", "View Donations"),
+            ("create_campaign", "Create Campaign"),
+            ("edit_campaign", "Edit Campaign"),
+            ("delete_campaign", "Delete Campaign"),
+            ("approve_donation", "Approve Donation"),
+            ("refund_donation", "Refund Donation"),
+            ("download_receipt", "Download Receipt"),
+            ("generate_reports", "Generate Reports"),
+        ],
+        "advertisements": [
+            ("view_ads", "View Ads"),
+            ("create_ad", "Create Ad"),
+            ("edit_ad", "Edit Ad"),
+            ("delete_ad", "Delete Ad"),
+            ("approve_ad", "Approve Ad"),
+            ("reject_ad", "Reject Ad"),
+            ("feature_ad", "Feature Ad"),
+            ("manage_slots", "Manage Slots"),
+            ("view_analytics", "View Analytics"),
+        ],
+        "messages": [
+            ("view_messages", "View Messages"),
+            ("send_message", "Send Message"),
+            ("delete_message", "Delete Message"),
+            ("pin_message", "Pin Message"),
+            ("broadcast_message", "Broadcast Message"),
+            ("manage_groups", "Manage Groups"),
+            ("manage_templates", "Manage Templates"),
+        ],
+        "jobs": [
+            ("view_jobs", "View Jobs"),
+            ("create_job", "Create Job"),
+            ("edit_job", "Edit Job"),
+            ("delete_job", "Delete Job"),
+            ("approve_job", "Approve Job"),
+            ("reject_job", "Reject Job"),
+            ("view_applicants", "View Applicants"),
+            ("export_applicants", "Export Applicants"),
+            ("manage_interviews", "Manage Interviews"),
+        ],
+        "businesses": [
+            ("view_businesses", "View Businesses"),
+            ("create_business", "Create Business"),
+            ("edit_business", "Edit Business"),
+            ("delete_business", "Delete Business"),
+            ("approve_listing", "Approve Listing"),
+            ("reject_listing", "Reject Listing"),
+            ("feature_listing", "Feature Listing"),
+            ("manage_reviews", "Manage Reviews"),
+        ],
+        "attendance": [
+            ("view_attendance", "View Attendance"),
+            ("mark_attendance", "Mark Attendance"),
+            ("bulk_attendance", "Bulk Attendance"),
+            ("edit_attendance", "Edit Attendance"),
+            ("approve_attendance", "Approve Attendance"),
+            ("export_attendance", "Export Attendance"),
+        ],
+        "gallery": [
+            ("view_gallery", "View Gallery"),
+            ("upload_photos", "Upload Photos"),
+            ("delete_photos", "Delete Photos"),
+            ("approve_media", "Approve Media"),
+            ("reject_media", "Reject Media"),
+            ("manage_albums", "Manage Albums"),
+        ],
+        "dashboard": [
+            ("view_dashboard", "View Dashboard"),
+        ],
+        "hierarchy": [
+            ("view_hierarchy", "View Hierarchy"),
+            ("manage_hierarchy", "Manage Hierarchy"),
+        ],
+        "families": [
+            ("view_family", "View Family"),
+            ("edit_family", "Edit Family"),
+        ],
+        "family": [
+            ("view_family", "View Family"),
+            ("edit_family", "Edit Family"),
+        ],
+        "news": [
+            ("view_news", "View News"),
+            ("create_news", "Create News"),
+            ("edit_news", "Edit News"),
+            ("delete_news", "Delete News"),
+        ]
+    }
+
+    from api.models import ModulePermissionDefinition
+    for feature_code, perms in permission_catalog.items():
+        feat = FeatureMaster.objects.filter(code=feature_code).first()
+        if feat:
+            for p_code, p_name in perms:
+                ModulePermissionDefinition.objects.get_or_create(
+                    feature=feat,
+                    code=p_code,
+                    defaults={"name": p_name}
+                )
 
     # Make sure all registered ApplicationModules also exist in FeatureMaster
     for mod in ApplicationModule.objects.filter(deleted_at__isnull=True):
@@ -5297,29 +5706,52 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
             
         perm = PlanFeaturePermission.objects.filter(plan=plan, feature=fm).first()
         if not perm:
+            from api.models import ModulePermissionDefinition
+            all_defs = list(ModulePermissionDefinition.objects.filter(feature=fm).values_list('code', flat=True))
             perm = PlanFeaturePermission.objects.create(
                 plan=plan,
                 feature=fm,
+                allowed_operations=all_defs,
                 can_view=True,
                 can_create=True,
                 can_edit=True,
                 can_delete=True
             )
             
-        action_mapping = {
-            'view': perm.can_view,
-            'create': perm.can_create,
-            'edit': perm.can_edit,
-            'delete': perm.can_delete,
-            'approve': perm.can_approve,
-            'reject': perm.can_reject,
-            'manage': perm.can_manage,
-            'export': perm.can_export,
-            'import': perm.can_import,
-            'assign': perm.can_assign
-        }
+        from api.models import ModulePermissionDefinition
+        registered_codes = list(ModulePermissionDefinition.objects.filter(feature=fm).values_list('code', flat=True))
         
-        has_perm = action_mapping.get(action_name, perm.can_view)
+        if registered_codes:
+            # Check dynamic operations
+            if action_name in registered_codes:
+                has_perm = action_name in (perm.allowed_operations or [])
+            else:
+                # Map standard request methods to matching Dynamic Operations
+                ops = perm.allowed_operations or []
+                if action_name == 'view':
+                    has_perm = any('view' in op or 'read' in op for op in ops)
+                elif action_name == 'create':
+                    has_perm = any(any(k in op for k in ['create', 'add', 'upload', 'send', 'mark', 'generate', 'publish']) for op in ops)
+                elif action_name == 'edit':
+                    has_perm = any(any(k in op for k in ['edit', 'update', 'modify', 'change', 'assign', 'reset', 'merge']) for op in ops)
+                elif action_name == 'delete':
+                    has_perm = any(any(k in op for k in ['delete', 'remove', 'suspend', 'archive', 'cancel', 'reject']) for op in ops)
+                else:
+                    has_perm = action_name in ops
+        else:
+            action_mapping = {
+                'view': perm.can_view,
+                'create': perm.can_create,
+                'edit': perm.can_edit,
+                'delete': perm.can_delete,
+                'approve': perm.can_approve,
+                'reject': perm.can_reject,
+                'manage': perm.can_manage,
+                'export': perm.can_export,
+                'import': perm.can_import,
+                'assign': perm.can_assign
+            }
+            has_perm = action_mapping.get(action_name, perm.can_view)
         
         if not has_perm:
             upgrade_required = False
@@ -5337,22 +5769,18 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
             })
             
         limit_mapping = {
-            "members": lambda: Member.objects.filter(community=community).count(),
-            "family": lambda: Family.objects.filter(community=community).count(),
-            "events": lambda: Event.objects.filter(community=community).count(),
-            "businesses": lambda: Business.objects.filter(community=community).count(),
-            "matrimony": lambda: MatrimonyProfile.objects.filter(community=community).count(),
-            "committee": lambda: Committee.objects.filter(community=community).count(),
-            "gallery": lambda: Gallery.objects.filter(community=community).count()
+            "members": ("max_members", lambda: Member.objects.filter(community=community).count()),
+            "family": ("max_family_members", lambda: Family.objects.filter(community=community).count()),
+            "committee": ("max_committee_members", lambda: Committee.objects.filter(community=community).count()),
+            "communities": ("max_communities", lambda: Community.objects.filter(parent=community).count()),
+            "gallery": ("max_gallery_images", lambda: Gallery.objects.filter(community=community).count())
         }
         
         if module_code in limit_mapping:
-            current_val = limit_mapping[module_code]()
-            max_limit = getattr(plan, f"max_{module_code}", 0) if plan else 0
-            if module_code == "members": max_limit = plan.max_members if plan else 0
-            if module_code == "family": max_limit = plan.max_family_members if plan else 0
-            if module_code == "committee": max_limit = plan.max_committee_members if plan else 0
-            if module_code == "gallery": max_limit = plan.max_gallery_images if plan else 0
+            quota_code, get_current = limit_mapping[module_code]
+            current_val = get_current()
+            from api.quota_engine import get_community_quota_limit
+            max_limit = get_community_quota_limit(community, quota_code)
             
             if max_limit > 0 and current_val >= max_limit:
                 return Response({
@@ -5362,7 +5790,6 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
                     "current": current_val,
                     "limit": max_limit
                 })
-                
         return Response({
             "has_access": True,
             "status": "Enabled"
@@ -5399,8 +5826,7 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
             
         plan = sub.plan
         
-        import datetime
-        now = datetime.datetime.now(datetime.timezone.utc) if sub.end_date and sub.end_date.tzinfo else datetime.datetime.now()
+        now = timezone.now()
         
         countdown_days = 0
         if sub.end_date:
@@ -5425,61 +5851,32 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
             "grace_period_ends_at": sub.grace_period_ends_at
         }
         
-        members_count = Member.objects.filter(community=community).count()
-        families_count = Family.objects.filter(community=community).count()
-        events_count = Event.objects.filter(community=community).count()
-        businesses_count = Business.objects.filter(community=community).count()
-        matrimony_count = MatrimonyProfile.objects.filter(community=community).count()
-        committee_count = Committee.objects.filter(community=community).count()
-        gallery_count = Gallery.objects.filter(community=community).count()
+        from api.quota_engine import get_community_quota_limit, get_community_storage_used_bytes
         
-        # Calculate media sizes
-        import os
-        from django.conf import settings
-        total_size_bytes = 0
-        try:
-            for root, dirs, files in os.walk(settings.MEDIA_ROOT):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    if os.path.exists(fp):
-                        total_size_bytes += os.path.getsize(fp)
-        except Exception:
-            pass
-        if total_size_bytes < 1024 * 1024:
-            total_size_bytes = (gallery_count * 1.5 * 1024 * 1024) + (committee_count * 0.5 * 1024 * 1024) + (1.2 * 1024 * 1024)
-            
-        storage_used_gb = round(total_size_bytes / (1024 * 1024 * 1024), 2)
+        storage_used_bytes = get_community_storage_used_bytes(community)
+        storage_used_gb = round(storage_used_bytes / (1024 * 1024 * 1024), 2)
         if storage_used_gb < 0.01:
             storage_used_gb = 0.01
             
-        def get_usage(metric, default_limit):
-            fu = FeatureUsage.objects.filter(community=community, metric=metric).first()
-            if fu:
-                return fu.current_usage, fu.max_limit
-            from api.models import UsageCounter
-            uc = UsageCounter.objects.filter(community=community, metric=metric).first()
-            if uc:
-                return uc.count, default_limit
-            return 0, default_limit
-
-        sms_used, sms_limit = get_usage('sms', plan.max_sms if plan else 100)
-        email_used, email_limit = get_usage('email_credits', plan.max_email_credits if plan else 1000)
-        whatsapp_used, whatsapp_limit = get_usage('whatsapp_credits', plan.max_whatsapp_credits if plan else 50)
-        api_used, api_limit = get_usage('api_calls', plan.max_api_calls if plan else 1000)
+        sub_comm_count = Community.objects.filter(parent=community).count()
+        members_count = Member.objects.filter(community=community).count()
+        families_count = Family.objects.filter(community=community).count()
+        committee_count = Committee.objects.filter(community=community).count()
+        events_count = Event.objects.filter(community=community).count()
+        businesses_count = Business.objects.filter(community=community).count()
+        gallery_count = Gallery.objects.filter(community=community).count()
+        try:
+            from api.models import MatrimonyProfile
+            matrimony_count = MatrimonyProfile.objects.filter(community=community).count()
+        except Exception:
+            matrimony_count = 0
 
         usage = [
-            {"metric": "Members", "current": members_count, "limit": plan.max_members if plan else 50, "unit": ""},
-            {"metric": "Families", "current": families_count, "limit": plan.max_family_members if plan else 200, "unit": ""},
-            {"metric": "Events", "current": events_count, "limit": plan.max_events if plan else 5, "unit": ""},
-            {"metric": "Businesses", "current": businesses_count, "limit": plan.max_businesses if plan else 5, "unit": ""},
-            {"metric": "Gallery", "current": gallery_count, "limit": plan.max_gallery_images if plan else 100, "unit": ""},
-            {"metric": "Matrimony Profiles", "current": matrimony_count, "limit": plan.max_matrimony_profiles if plan else 10, "unit": ""},
-            {"metric": "Committee", "current": committee_count, "limit": plan.max_committee_members if plan else 5, "unit": ""},
-            {"metric": "Storage", "current": storage_used_gb, "limit": plan.max_storage_gb if plan else 1, "unit": "GB"},
-            {"metric": "API Calls", "current": api_used, "limit": api_limit, "unit": ""},
-            {"metric": "SMS", "current": sms_used, "limit": sms_limit, "unit": ""},
-            {"metric": "Email", "current": email_used, "limit": email_limit, "unit": ""},
-            {"metric": "WhatsApp", "current": whatsapp_used, "limit": whatsapp_limit, "unit": ""}
+            {"metric": "Members", "current": members_count, "limit": get_community_quota_limit(community, "max_members"), "unit": ""},
+            {"metric": "Families", "current": families_count, "limit": get_community_quota_limit(community, "max_family_members"), "unit": ""},
+            {"metric": "Committee", "current": committee_count, "limit": get_community_quota_limit(community, "max_committee_members"), "unit": ""},
+            {"metric": "Communities", "current": sub_comm_count, "limit": get_community_quota_limit(community, "max_communities"), "unit": ""},
+            {"metric": "Storage", "current": storage_used_gb, "limit": get_community_quota_limit(community, "max_storage_gb"), "unit": "GB"}
         ]
 
         for u in usage:
@@ -5561,7 +5958,10 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
                 "name": p.name,
                 "code": p.code,
                 "monthly_price": p.monthly_price,
+                "quarterly_price": p.quarterly_price,
+                "half_yearly_price": p.half_yearly_price,
                 "yearly_price": p.yearly_price,
+                "lifetime_price": p.lifetime_price,
                 "trial_days": p.trial_days,
                 "max_members": p.max_members,
                 "max_storage_gb": p.max_storage_gb,
@@ -5675,10 +6075,14 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
         sub.plan = plan
         sub.status = 'Active'
         
-        now = datetime.datetime.now()
+        now = timezone.now()
         sub.start_date = now
         if billing_cycle == 'Monthly':
             sub.end_date = now + datetime.timedelta(days=30)
+        elif billing_cycle == 'Quarterly':
+            sub.end_date = now + datetime.timedelta(days=90)
+        elif billing_cycle == 'Half-Yearly':
+            sub.end_date = now + datetime.timedelta(days=182)
         elif billing_cycle == 'Yearly':
             sub.end_date = now + datetime.timedelta(days=365)
         else:
@@ -5688,6 +6092,10 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
         
         invoice_no = f"INV-{random.randint(100000, 999999)}"
         gst_invoice_no = f"GST-{random.randint(100000, 999999)}"
+        
+        payment_method = request.data.get('payment_method', 'Credit Card')
+        transaction_id = request.data.get('transaction_id', 'N/A')
+        
         SubscriptionHistory.objects.create(
             community=community,
             plan=plan,
@@ -5696,6 +6104,8 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
             billing_cycle=billing_cycle,
             invoice_no=invoice_no,
             gst_invoice_no=gst_invoice_no,
+            payment_method=payment_method,
+            transaction_id=transaction_id,
             notes=f"Assigned plan {plan.name} to community {community.name}."
         )
 
@@ -5749,7 +6159,7 @@ class CommunitySubscriptionViewSet(viewsets.ModelViewSet):
         billing_cycle = request.data.get('billing_cycle', 'Monthly')
         price_paid = request.data.get('price_paid', sub.plan.monthly_price if billing_cycle == 'Monthly' else sub.plan.yearly_price)
         
-        now = datetime.datetime.now()
+        now = timezone.now()
         base_date = sub.end_date if sub.end_date and sub.end_date > now else now
         
         if billing_cycle == 'Monthly':
@@ -5822,6 +6232,10 @@ class SubscriptionHistoryViewSet(viewsets.ModelViewSet):
     queryset = SubscriptionHistory.objects.all().order_by('-created_at')
     serializer_class = SubscriptionHistorySerializer
     permission_classes = [permissions.AllowAny]
+class SystemQuotaViewSet(viewsets.ModelViewSet):
+    queryset = SystemQuota.objects.all().order_by('name')
+    serializer_class = SystemQuotaSerializer
+    permission_classes = [permissions.AllowAny]
 
 class PlanAddonViewSet(viewsets.ModelViewSet):
     queryset = PlanAddon.objects.all()
@@ -5859,11 +6273,13 @@ class PlanAddonViewSet(viewsets.ModelViewSet):
             comm_addon.quantity += quantity
             comm_addon.save()
 
-        # 2. Update FeatureUsage limit
-        fu = FeatureUsage.objects.filter(community=community, metric=addon.limit_type).first()
-        if fu:
-            fu.max_limit += addon.limit_value * quantity
-            fu.save()
+        # 2. Update FeatureUsage limit using new relational schema
+        metric_code = addon.target_limit.code if addon.target_limit else ""
+        if metric_code:
+            fu = FeatureUsage.objects.filter(community=community, metric=metric_code).first()
+            if fu:
+                fu.max_limit += addon.increment * quantity
+                fu.save()
 
         # 3. Create Invoice & Transaction
         total_amount = addon.price * quantity
@@ -5903,7 +6319,6 @@ class PlanAddonViewSet(viewsets.ModelViewSet):
                 "id": comm_addon.id,
                 "addon_id": addon.id,
                 "addon_name": addon.name,
-                "quantity": comm_addon.quantity
             }
         })
 
@@ -7892,8 +8307,7 @@ class ApplicationModuleViewSet(viewsets.ModelViewSet):
         if module.is_system:
             return Response({'error': 'Cannot delete system modules'}, status=400)
         
-        import datetime
-        module.deleted_at = datetime.datetime.now()
+        module.deleted_at = timezone.now()
         module.is_active = False
         module.save()
         

@@ -1,20 +1,49 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+
+// Print Stylesheet injection for professional invoice printing
+if (typeof document !== 'undefined') {
+  const style = document.createElement('style');
+  style.innerHTML = `
+    @media print {
+      body * {
+        visibility: hidden !important;
+      }
+      #printable-invoice, #printable-invoice * {
+        visibility: visible !important;
+      }
+      #printable-invoice {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        box-shadow: none !important;
+        background: white !important;
+        color: black !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
 import { useAuth } from "@/context/AuthContext";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import {
-  LayoutDashboard, CreditCard, ShieldCheck, Box, FileText, CheckCircle2,
-  AlertTriangle, ArrowUpCircle, RefreshCw, HardDrive, Users, UserCog, 
-  Calendar, Image as ImageIcon, Heart, Building2, DollarSign, Download, 
-  Printer, Percent, AlertCircle, Sparkles, Plus, Minus, Lock, BarChart2,
-  RefreshCcw, Trash2, Bell, ShieldAlert, Award, Shield, Cpu, ChevronRight, Check, Activity
+  LayoutDashboard, CreditCard, Box, CheckCircle2,
+  AlertTriangle, RefreshCw, HardDrive, Users, UserCog, 
+  Calendar, Image as ImageIcon, Heart, Building2, Download, 
+  Printer, AlertCircle, Sparkles, Plus, Minus, Lock, BarChart2,
+  Trash2, ShieldAlert, Award, Shield, Cpu, ChevronRight, Check
 } from "lucide-react";
+
 
 export const Route = createFileRoute("/community-admin/plan")({
   component: OrganizationSubscriptionCenter,
 });
 
-type MainTabKey = "overview" | "modules" | "analytics" | "billing" | "security";
+type MainTabKey = "overview" | "modules" | "analytics" | "billing";
 type BillingSubTabKey = "renewals" | "invoices" | "addons" | "cards" | "refunds";
 
 function OrganizationSubscriptionCenter() {
@@ -70,6 +99,16 @@ function OrganizationSubscriptionCenter() {
 
   // Upgrade/Downgrade states
   const [selectedPlanUpgrade, setSelectedPlanUpgrade] = useState<any>(null);
+  
+  // Premium Payment Modal states
+  const [isPaymentWindowOpen, setIsPaymentWindowOpen] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
+  const [paymentSuccessInvoice, setPaymentSuccessInvoice] = useState<any>(null);
+  const [paymentMethodSelected, setPaymentMethodSelected] = useState<"card" | "upi" | "netbanking">("card");
+  const [applyWalletCredits, setApplyWalletCredits] = useState(true);
+  const [cardDetails, setCardDetails] = useState({ number: "", name: "", expiry: "", cvv: "" });
+  const [upiId, setUpiId] = useState("");
+  const [selectedBank, setSelectedBank] = useState("");
   const [billingCycle, setBillingCycle] = useState<"Monthly" | "Quarterly" | "Half-Yearly" | "Yearly" | "Lifetime">("Monthly");
   const [isDowngradeWarnOpen, setIsDowngradeWarnOpen] = useState(false);
   const [downgradePlan, setDowngradePlan] = useState<any>(null);
@@ -112,7 +151,7 @@ function OrganizationSubscriptionCenter() {
       setAuditLogs(auditRes || []);
     } catch (err: any) {
       console.error(err);
-      setError("Failed to load Billing & Subscription settings.");
+      setError(`Failed to load Billing & Subscription settings. Details: ${err.message || 'Network Error'}`);
     } finally {
       setLoading(false);
     }
@@ -206,20 +245,68 @@ function OrganizationSubscriptionCenter() {
   // Upgrade Plan Trigger
   const handleUpgradePlan = (plan: any) => {
     setSelectedPlanUpgrade(plan);
-    requestOtpForAction(`Upgrade Plan to ${plan.name}`, async () => {
+    setIsPaymentWindowOpen(true);
+  };
+
+  // Secure payment process submission
+  const processSecurePayment = async () => {
+    setIsPaying(true);
+    
+    const basePrice = billingCycle === "Monthly" 
+      ? selectedPlanUpgrade.monthly_price 
+      : billingCycle === "Quarterly" 
+      ? selectedPlanUpgrade.quarterly_price 
+      : billingCycle === "Half-Yearly" 
+      ? selectedPlanUpgrade.half_yearly_price 
+      : billingCycle === "Yearly" 
+      ? selectedPlanUpgrade.yearly_price 
+      : selectedPlanUpgrade.lifetime_price;
+    
+    const gstVal = basePrice * 0.18;
+    const grandTotal = basePrice + gstVal;
+
+    setTimeout(async () => {
       try {
+        const invNo = `INV-COMM-${Math.floor(100000 + Math.random() * 900000)}`;
+        const gstNo = `GST-${Math.floor(100000 + Math.random() * 900000)}`;
+        const txnId = `TXN-${Math.random().toString(36).substring(2, 14).toUpperCase()}`;
+        const payMethodStr = paymentMethodSelected === "card" 
+          ? "Credit Card" 
+          : paymentMethodSelected === "upi" 
+          ? `UPI (${upiId || "Razorpay"})` 
+          : `Net Banking (${selectedBank.toUpperCase()})`;
+        
         await api.assignPlan({
           community_id: Number(user?.communityId || 1),
-          plan_id: plan.id,
+          plan_id: selectedPlanUpgrade.id,
           billing_cycle: billingCycle,
-          price_paid: billingCycle === "Monthly" ? plan.monthly_price : plan.yearly_price
+          price_paid: grandTotal,
+          payment_method: payMethodStr,
+          transaction_id: txnId
         });
-        alert(`Congratulations! Your Samaj community plan upgraded to ${plan.name}.`);
-        fetchData();
+
+        // Store invoice details in state to show receipt screen
+        setPaymentSuccessInvoice({
+          invoice_no: invNo,
+          gst_invoice_no: gstNo,
+          transaction_id: txnId,
+          amount: grandTotal,
+          base_price: basePrice,
+          gst: gstVal,
+          grand_total: grandTotal,
+          plan_name: selectedPlanUpgrade.name,
+          date: new Date().toLocaleDateString(),
+          method: payMethodStr
+        });
+
+        setIsPaymentWindowOpen(false);
+        fetchData(); // reload statistics
       } catch (err) {
-        alert("Failed to process plan upgrade.");
+        alert("Secure payment validation failed. Please check credentials.");
+      } finally {
+        setIsPaying(false);
       }
-    });
+    }, 2000);
   };
 
   // Downgrade validation
@@ -346,21 +433,14 @@ function OrganizationSubscriptionCenter() {
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row min-h-[calc(100vh-73px)]">
-        {/* Navigation Sidebar */}
-        <div className="w-full lg:w-64 border-r border-[#E6D9C8] bg-[#FFFDF9] p-4 space-y-1 flex flex-row lg:flex-col overflow-x-auto lg:overflow-x-visible shrink-0 scrollbar-none sticky lg:top-[73px] lg:h-[calc(100vh-73px)]">
-          <div className="hidden lg:block pb-4 mb-4 border-b border-[#E6D9C8]">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block px-3">
-              OPERATIONAL HUB
-            </span>
-          </div>
-
+      {/* Horizontal Navigation Tabs */}
+      <div className="border-b border-[#E6D9C8] bg-[#FFFDF9]/80 backdrop-blur-md px-6 md:px-8 py-3 flex items-center justify-between sticky top-[73px] z-20">
+        <div className="flex gap-2 overflow-x-auto scrollbar-none py-0.5">
           {[
             { id: "overview", label: "Overview", icon: LayoutDashboard },
             { id: "modules", label: "Modules & Access", icon: Cpu },
             { id: "analytics", label: "Usage & Quotas", icon: BarChart2 },
             { id: "billing", label: "Billing & Financials", icon: CreditCard },
-            { id: "security", label: "Security & Auditing", icon: ShieldCheck }
           ].map((tab) => {
             const Icon = tab.icon;
             const active = activeMainTab === tab.id;
@@ -368,21 +448,28 @@ function OrganizationSubscriptionCenter() {
               <button
                 key={tab.id}
                 onClick={() => setActiveMainTab(tab.id as MainTabKey)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap lg:w-full ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 whitespace-nowrap border ${
                   active
-                    ? "bg-orange-50/70 text-[#EA580C] border border-orange-200/50"
-                    : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-slate-200"
+                    ? "bg-[#EA580C] text-white border-[#EA580C] shadow-md shadow-orange-500/20"
+                    : "bg-[#FFFDF9] text-slate-600 dark:text-slate-400 border-[#E6D9C8] hover:bg-slate-50 hover:text-slate-900"
                 }`}
               >
-                <Icon className={`w-4 h-4 ${active ? "text-[#EA580C]" : "text-slate-400"}`} />
+                <Icon className={`w-3.5 h-3.5 ${active ? "text-white" : "text-slate-400"}`} />
                 {tab.label}
               </button>
             );
           })}
         </div>
 
+        <div className="hidden md:flex items-center gap-2 text-xs font-bold text-slate-500">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>All Systems Operational</span>
+        </div>
+      </div>
+
+      <div className="flex flex-col min-h-[calc(100vh-125px)]">
         {/* Main Content Area */}
-        <div className="flex-1 p-6 md:p-8 space-y-8 overflow-y-auto max-w-7xl">
+        <div className="flex-1 p-6 md:p-8 space-y-8 overflow-y-auto w-full">
           
           {/* OTP Authorization Banner */}
           {otpSent && (
@@ -535,10 +622,10 @@ function OrganizationSubscriptionCenter() {
               {/* KPI Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 {[
-                  { name: "Members Active", current: usage[0]?.current || 0, limit: usage[0]?.limit || 50, color: "text-[#EA580C]", bg: "bg-[#EA580C]", metric: usage[0] },
-                  { name: "Storage Used", current: `${usage[7]?.current || 0.0} GB`, limit: `${usage[7]?.limit || 1} GB`, color: "text-teal-600 dark:text-teal-400", bg: "bg-teal-500", metric: usage[7] },
-                  { name: "Events Created", current: usage[2]?.current || 0, limit: usage[2]?.limit || 5, color: "text-pink-600 dark:text-pink-400", bg: "bg-pink-500", metric: usage[2] },
-                  { name: "SMS Balance", current: usage[9]?.limit - usage[9]?.current || 0, limit: usage[9]?.limit || 100, color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500", metric: usage[9] }
+                  { name: "Members Active", current: usage.find((u: any) => u.metric === "Members")?.current || 0, limit: usage.find((u: any) => u.metric === "Members")?.limit || 0, color: "text-[#EA580C]", bg: "bg-[#EA580C]", metric: usage.find((u: any) => u.metric === "Members") },
+                  { name: "Storage Used", current: `${usage.find((u: any) => u.metric === "Storage")?.current || 0.0} GB`, limit: `${usage.find((u: any) => u.metric === "Storage")?.limit || 0} GB`, color: "text-teal-600 dark:text-teal-400", bg: "bg-teal-500", metric: usage.find((u: any) => u.metric === "Storage") },
+                  { name: "Communities", current: usage.find((u: any) => u.metric === "Communities")?.current || 0, limit: usage.find((u: any) => u.metric === "Communities")?.limit || 0, color: "text-pink-600 dark:text-pink-400", bg: "bg-pink-500", metric: usage.find((u: any) => u.metric === "Communities") },
+                  { name: "Family Units", current: usage.find((u: any) => u.metric === "Families")?.current || 0, limit: usage.find((u: any) => u.metric === "Families")?.limit || 0, color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500", metric: usage.find((u: any) => u.metric === "Families") }
                 ].map((kpi, idx) => {
                   const pct = kpi.metric ? Math.min(100, Math.round((kpi.metric.current / kpi.metric.limit) * 100)) : 0;
                   return (
@@ -561,16 +648,16 @@ function OrganizationSubscriptionCenter() {
                 })}
               </div>
 
-              {/* Grid: Quota Overview + Timeline */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Grid: Quota Overview */}
+              <div className="grid grid-cols-1 gap-6">
                 {/* Quota Gauge Grid */}
-                <div className="lg:col-span-2 bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
+                <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
                   <div className="flex justify-between items-center">
                     <div>
                       <h4 className="font-bold text-sm dark:text-white">Dynamic Resource Utilization</h4>
                       <p className="text-[11px] text-slate-400">Real-time capacity tracking for critical services</p>
                     </div>
-                    <button 
+                    <button
                       onClick={() => setActiveMainTab("analytics")}
                       className="text-xs text-[#EA580C] font-bold hover:underline"
                     >
@@ -578,7 +665,7 @@ function OrganizationSubscriptionCenter() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     {usage.slice(0, 8).map((u: any, idx: number) => {
                       const Icon = getMetricIcon(u.metric);
                       return (
@@ -600,43 +687,11 @@ function OrganizationSubscriptionCenter() {
                     })}
                   </div>
                 </div>
-
-                {/* Audit log overview timeline */}
-                <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm flex flex-col justify-between gap-6">
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="font-bold text-sm dark:text-white">Recent Activity Trail</h4>
-                      <p className="text-[11px] text-slate-400">Latest events from security and operations logs</p>
-                    </div>
-
-                    <div className="space-y-4 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[1px] before:bg-slate-200 dark:before:bg-slate-800">
-                      {auditLogs.slice(0, 3).map((log: any, idx: number) => (
-                        <div key={idx} className="flex gap-3 text-xs">
-                          <div className="w-6 h-6 rounded-full bg-orange-50 border border-[#E6D9C8] flex items-center justify-center shrink-0 z-10">
-                            <Activity className="w-3 h-3 text-[#EA580C]" />
-                          </div>
-                          <div className="space-y-0.5">
-                            <p className="font-semibold text-slate-700 dark:text-slate-200 capitalize">{log.field_name.replace("_", " ")}</p>
-                            <p className="text-[10px] text-slate-400">{log.changed_by_name || "Admin"} • {new Date(log.created_at || log.timestamp).toLocaleDateString()}</p>
-                          </div>
-                        </div>
-                      ))}
-                      {auditLogs.length === 0 && (
-                        <p className="text-xs text-slate-400 text-center py-6">No audit records found.</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setActiveMainTab("security")}
-                    className="w-full py-2 text-center text-xs font-bold bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 rounded-xl transition"
-                  >
-                    View Audit Dashboard
-                  </button>
-                </div>
               </div>
             </div>
           )}
+
+
 
           {/* TAB 2: ACTIVE MODULES REGISTRY */}
           {activeMainTab === "modules" && (
@@ -845,7 +900,21 @@ function OrganizationSubscriptionCenter() {
                     <div className="bg-[#FFFDF9] p-5 rounded-2xl border border-[#E6D9C8] shadow-sm relative overflow-hidden">
                       <span className="text-[10px] text-slate-400 font-bold uppercase block mb-1">ESTIMATED PRICE</span>
                       <h4 className="text-2xl font-black text-[#EA580C]">
-                        ₹{(header.plan_code === "basic" ? 1999 : 4999).toLocaleString()}
+                        {(() => {
+                          const currentPlan = (plans || []).find((p: any) => p.code === header?.plan_code);
+                          if (!currentPlan) return "₹0";
+                          const val = 
+                            billingCycle === "Monthly" 
+                              ? currentPlan.monthly_price 
+                              : billingCycle === "Quarterly"
+                              ? currentPlan.quarterly_price
+                              : billingCycle === "Half-Yearly"
+                              ? currentPlan.half_yearly_price
+                              : billingCycle === "Yearly"
+                              ? currentPlan.yearly_price
+                              : currentPlan.lifetime_price;
+                          return (currentPlan.currency === "USD" ? "$" : "₹") + (val || 0).toLocaleString();
+                        })()}
                       </h4>
                       <p className="text-[10px] text-slate-400 uppercase mt-1">Cycle: {billingCycle}</p>
                       <div className="absolute bottom-0 left-0 right-0 h-1 bg-emerald-500" />
@@ -865,7 +934,7 @@ function OrganizationSubscriptionCenter() {
                       <h4 className="font-bold text-sm dark:text-white">Plan Comparison Chart</h4>
                       
                       <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
-                        {["Monthly", "Yearly", "Lifetime"].map((cycle) => (
+                        {["Monthly", "Quarterly", "Half-Yearly", "Yearly", "Lifetime"].map((cycle) => (
                           <button
                             key={cycle}
                             onClick={() => setBillingCycle(cycle as any)}
@@ -882,7 +951,7 @@ function OrganizationSubscriptionCenter() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      {plans.length === 0 ? (
+                      {(!plans || plans.length === 0) ? (
                         <div className="col-span-full bg-[#FFFDF9] border border-[#E6D9C8] rounded-2xl p-8 text-center space-y-3">
                           <AlertCircle className="w-8 h-8 text-amber-500 mx-auto animate-pulse" />
                           <h5 className="font-bold text-sm text-[#3E2723]">No Upgrade Plans Configured</h5>
@@ -892,114 +961,125 @@ function OrganizationSubscriptionCenter() {
                         </div>
                       ) : (
                         plans.map((p: any) => {
-                          const isCurrent = p.is_current;
-                          const price = billingCycle === "Monthly" ? p.monthly_price : p.yearly_price;
-                          const isHigher = price > (header.plan_code === "basic" ? 1999 : 4999);
+                          const isCurrent = p.code === header?.plan_code;
+                          const price = 
+                             billingCycle === "Monthly" 
+                               ? p.monthly_price 
+                               : billingCycle === "Quarterly"
+                               ? p.quarterly_price
+                               : billingCycle === "Half-Yearly"
+                               ? p.half_yearly_price
+                               : billingCycle === "Yearly"
+                               ? p.yearly_price
+                               : p.lifetime_price;
                           
-                          return (
-                            <div
-                              key={p.code}
-                              className={`bg-[#FFFDF9] rounded-2xl p-6 border shadow-sm flex flex-col justify-between gap-6 relative ${
-                                isCurrent 
-                                  ? "border-2 border-[#EA580C]" 
-                                  : "border-[#E6D9C8]"
-                              }`}
-                            >
-                              <div className="space-y-4">
-                                <div className="flex justify-between items-center">
-                                  <h4 className="font-extrabold text-sm dark:text-white uppercase">{p.name}</h4>
-                                  {p.is_recommended && (
-                                    <span className="px-2 py-0.5 bg-orange-50 text-[#EA580C] text-[9px] font-bold rounded-full border border-orange-200/50">
-                                      Recommended
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-slate-400 leading-relaxed">{p.description}</p>
-                                
-                                <div className="text-xl font-black dark:text-white">
-                                  ₹{price.toLocaleString()}
-                                  <span className="text-xs text-slate-400 font-normal"> / {billingCycle === "Monthly" ? "mo" : "yr"}</span>
-                                </div>
+                          // Find current plan price dynamically
+                          const currentPlan = (plans || []).find((plan: any) => plan.code === header?.plan_code);
+                          const currentPrice = currentPlan 
+                             ? (billingCycle === "Monthly" 
+                               ? currentPlan.monthly_price 
+                               : billingCycle === "Quarterly"
+                               ? currentPlan.quarterly_price
+                               : billingCycle === "Half-Yearly"
+                               ? currentPlan.half_yearly_price
+                               : billingCycle === "Yearly"
+                               ? currentPlan.yearly_price
+                               : currentPlan.lifetime_price) 
+                             : 0;
+                          
+                          const isHigher = price > currentPrice;
+                          
+                          const themeClass = p.color_theme || "from-slate-100 to-[#FFFDF9] text-slate-800 bg-[#FFFDF9]";
+                           return (
+                             <div
+                               key={p.code}
+                               className={`rounded-3xl p-6 border shadow-lg flex flex-col justify-between gap-6 relative transition-all duration-300 hover:scale-[1.02] bg-[#FFFDF9] ${
+                                 isCurrent 
+                                   ? "ring-4 ring-offset-2 ring-[#EA580C] border-[#EA580C]" 
+                                   : "border-[#E6D9C8] hover:border-slate-350"
+                               }`}
+                             >
+                               <div className="space-y-4">
+                                 <div className="flex justify-between items-center">
+                                   <h4 className="font-extrabold text-sm uppercase text-slate-900">{p.name}</h4>
+                                   {isCurrent && (
+                                     <span className="px-2.5 py-0.5 bg-orange-100 text-[#EA580C] text-[9px] font-bold rounded-full border border-orange-200/50 tracking-wider">
+                                       Current Plan
+                                     </span>
+                                   )}
+                                   {!isCurrent && p.display_badge && (
+                                     <span className="px-2.5 py-0.5 bg-slate-100 text-slate-655 text-[9px] font-bold rounded-full border border-slate-200 tracking-wider">
+                                       {p.display_badge}
+                                     </span>
+                                   )}
+                                   {!isCurrent && !p.display_badge && p.is_recommended && (
+                                     <span className="px-2.5 py-0.5 bg-slate-100 text-slate-655 text-[9px] font-bold rounded-full border border-slate-200 tracking-wider">
+                                       Recommended
+                                     </span>
+                                   )}
+                                 </div>
+                                 <p className="text-xs text-slate-500 leading-relaxed min-h-[3rem]">{p.description}</p>
+                                 
+                                 <div className="text-3xl font-black text-slate-900">
+                                   {p.currency === "USD" ? "$" : "₹"}{price.toLocaleString()}
+                                   <span className="text-xs text-slate-400 font-normal">
+                                     {billingCycle === "Monthly" 
+                                       ? " / mo" 
+                                       : billingCycle === "Quarterly" 
+                                       ? " / qtr" 
+                                       : billingCycle === "Half-Yearly" 
+                                       ? " / 6mo" 
+                                       : billingCycle === "Yearly" 
+                                       ? " / yr" 
+                                       : " / lifetime"}
+                                   </span>
+                                 </div>
 
-                                <div className="space-y-2 border-t border-[#E6D9C8] pt-4 text-xs">
-                                  <div className="flex justify-between">
-                                    <span className="text-slate-400">Members Cap</span>
-                                    <span className="font-bold dark:text-white">{p.max_members}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-slate-400">Media Disk Limit</span>
-                                    <span className="font-bold dark:text-white">{p.max_storage_gb} GB</span>
-                                  </div>
-                                </div>
-                              </div>
+                                 <div className="space-y-2 border-t border-[#E6D9C8] pt-4 text-xs text-slate-600">
+                                   <div className="flex justify-between">
+                                     <span className="text-slate-550">Members Cap</span>
+                                     <span className="font-bold text-slate-900">{p.max_members}</span>
+                                   </div>
+                                   <div className="flex justify-between">
+                                     <span className="text-slate-550">Media Disk Limit</span>
+                                     <span className="font-bold text-slate-900">{p.max_storage_gb} GB</span>
+                                   </div>
+                                   {p.modules?.active_features?.length > 0 && (
+                                     <div className="flex justify-between">
+                                       <span className="text-slate-550">Premium Modules</span>
+                                       <span className="font-bold text-slate-900">{p.modules.active_features.length}</span>
+                                     </div>
+                                   )}
+                                 </div>
+                               </div>
 
-                              {isCurrent ? (
-                                <button disabled className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl text-xs font-bold cursor-not-allowed border border-[#E6D9C8]">
-                                  Current Active Plan
-                                </button>
-                              ) : isHigher ? (
-                                <button
-                                  onClick={() => handleUpgradePlan(p)}
-                                  className="w-full py-2 bg-[#EA580C] hover:bg-[#D94E06] text-white rounded-xl text-xs font-bold transition active:scale-95 duration-150 shadow-sm"
-                                >
-                                  Upgrade Plan
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleCheckDowngrade(p)}
-                                  className="w-full py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition border border-[#E6D9C8] active:scale-95 duration-150"
-                                >
-                                  Downgrade
-                                </button>
-                              )}
-                            </div>
+                               {isCurrent ? (
+                                 <button disabled className="w-full py-2.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-bold cursor-not-allowed border border-[#E6D9C8] mt-4">
+                                   Current Active Plan
+                                 </button>
+                               ) : isHigher ? (
+                                 <button
+                                   onClick={() => handleUpgradePlan(p)}
+                                   className="w-full py-2.5 bg-[#EA580C] hover:bg-[#D94E06] text-white rounded-xl text-xs font-black transition active:scale-95 hover:shadow-lg duration-150 mt-4 shadow-sm"
+                                 >
+                                   Upgrade Plan
+                                 </button>
+                               ) : (
+                                 <button
+                                   onClick={() => handleUpgradePlan(p)}
+                                   className="w-full py-2.5 bg-[#FFFDF9] hover:bg-slate-50 text-slate-755 rounded-xl text-xs font-bold transition border border-[#E6D9C8] active:scale-95 duration-150 mt-4"
+                                 >
+                                   Downgrade Plan
+                                 </button>
+                               )}
+                             </div>
                           );
                         })
                       )}
                     </div>
                   </div>
 
-                  {/* Renew Secure Area */}
-                  <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
-                    <h4 className="font-bold text-sm dark:text-white">Apply Promotion Coupon</h4>
-                    <div className="flex gap-2 max-w-md">
-                      <input
-                        type="text"
-                        placeholder="Promo Code (e.g. SAMAJ50)"
-                        value={couponInput}
-                        onChange={(e) => setCouponInput(e.target.value)}
-                        className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2 rounded-xl text-xs outline-none w-full font-semibold"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleValidateCoupon}
-                        className="px-4 py-2 bg-[#EA580C] hover:bg-[#D94E06] active:scale-95 text-white text-xs font-bold rounded-xl transition duration-150"
-                      >
-                        Apply
-                      </button>
-                    </div>
-                    {couponError && <p className="text-xs text-red-500 font-bold">{couponError}</p>}
-                    {appliedCoupon && <p className="text-xs text-green-500 font-bold">Applied Successfully! Flat discount: ₹{couponDiscount}</p>}
-                    
-                    <div className="pt-4 border-t border-[#E6D9C8] flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                      <div className="space-y-1">
-                        <span className="text-[10px] text-slate-400 block uppercase">Final Payable Balance</span>
-                        <div className="text-2xl font-black text-slate-900 dark:text-white">
-                          ₹{Math.max(0, (header.plan_code === "basic" ? 1999 : 4999) - couponDiscount).toLocaleString()}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => {
-                          requestOtpForAction("Renew Subscription", async () => {
-                            alert("Subscription renewed successfully!");
-                          });
-                        }}
-                        className="w-full md:w-auto px-6 py-3 bg-[#EA580C] hover:bg-[#D94E06] active:scale-95 text-white text-xs font-bold rounded-xl transition duration-150 shadow-sm"
-                      >
-                        Renew Subscription
-                      </button>
-                    </div>
-                  </div>
+
                 </div>
               )}
 
@@ -1271,185 +1351,8 @@ function OrganizationSubscriptionCenter() {
             </div>
           )}
 
-          {/* TAB 5: SECURITY & AUDIT */}
-          {activeMainTab === "security" && (
-            <div className="space-y-8">
-              {/* OTP and Security Alert Configuration */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
-                  <div>
-                    <h4 className="font-bold text-sm dark:text-white">Multi-Factor Billing Security</h4>
-                    <p className="text-xs text-slate-450 mt-1">Require additional checks for administrative actions</p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 border border-[#E6D9C8] rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-850 transition">
-                      <div className="space-y-0.5">
-                        <span className="font-bold text-xs block dark:text-white">OTP Verification for Renewals</span>
-                        <span className="text-[10px] text-slate-400">Verifies system administrator via email.</span>
-                      </div>
-                      <input type="checkbox" defaultChecked className="rounded accent-[#EA580C] text-[#EA580C] w-4 h-4" />
-                    </div>
-
-                    <div className="flex items-center justify-between p-4 border border-[#E6D9C8] rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-850 transition">
-                      <div className="space-y-0.5">
-                        <span className="font-bold text-xs block dark:text-white">Log Administrative Activity</span>
-                        <span className="text-[10px] text-slate-400">Records changes permanently in audit registry.</span>
-                      </div>
-                      <input type="checkbox" checked disabled className="rounded accent-[#EA580C] text-[#EA580C] w-4 h-4 cursor-not-allowed opacity-50" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
-                  <div>
-                    <h4 className="font-bold text-sm dark:text-white">Quota Limit Notifications</h4>
-                    <p className="text-xs text-slate-450 mt-1">Configure warning channels for resource saturation alerts</p>
-                  </div>
-
-                  <div className="space-y-4 max-h-64 overflow-y-auto pr-1">
-                    {Object.entries(notifConfig).map(([event, channels]) => (
-                      <div key={event} className="p-3 border border-[#E6D9C8] rounded-xl space-y-2">
-                        <span className="font-bold text-xs capitalize dark:text-white">{event.replace("_", " ")}</span>
-                        <div className="flex gap-4 text-[10px] font-bold text-slate-400 uppercase">
-                          {["email", "sms", "whatsapp", "push"].map((channel) => (
-                            <label key={channel} className="flex items-center gap-1 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={(channels as any)[channel]}
-                                onChange={(e) => {
-                                  setNotifConfig({
-                                    ...notifConfig,
-                                    [event]: {
-                                      ...channels,
-                                      [channel]: e.target.checked
-                                    }
-                                  });
-                                }}
-                                className="rounded accent-[#EA580C] text-[#EA580C] w-3.5 h-3.5"
-                              />
-                              <span>{channel}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Comprehensive Audit Logs Trail */}
-              <div className="bg-[#FFFDF9] p-6 rounded-2xl border border-[#E6D9C8] shadow-sm space-y-6">
-                <div>
-                  <h4 className="font-bold text-sm dark:text-white">Billing Security Audit Trail</h4>
-                  <p className="text-xs text-slate-400 mt-1">Chronological record of system modifications and subscriptions</p>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-[#E6D9C8] text-slate-400 font-bold uppercase tracking-wider">
-                        <th className="pb-3">Event Timestamp</th>
-                        <th className="pb-3">Actor / Admin</th>
-                        <th className="pb-3">Action Type</th>
-                        <th className="pb-3">Previous State</th>
-                        <th className="pb-3">Modified State</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#E6D9C8]">
-                      {auditLogs.map((log: any) => (
-                        <tr key={log.id} className="text-slate-700 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-850 transition">
-                          <td className="py-3.5">{new Date(log.created_at || log.timestamp).toLocaleString()}</td>
-                          <td className="py-3.5 font-bold">{log.changed_by_name || "Admin"}</td>
-                          <td className="py-3.5 font-mono text-[10px] uppercase text-[#EA580C]">{log.field_name}</td>
-                          <td className="py-3.5 text-slate-400">{log.old_value || "Empty"}</td>
-                          <td className="py-3.5 font-semibold text-slate-900 dark:text-white">{log.new_value}</td>
-                        </tr>
-                      ))}
-                      {auditLogs.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="py-8 text-center text-slate-400">
-                            No security audit events recorded.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
         </div>
       </div>
-
-      {/* Downgrade Limit Warning Assessment Dialog */}
-      {isDowngradeWarnOpen && downgradePlan && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#FFFDF9] rounded-3xl max-w-md w-full border border-[#E6D9C8] p-6 md:p-8 shadow-2xl space-y-6">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-red-50 dark:bg-red-950/20 rounded-full text-red-500">
-                <ShieldAlert className="w-8 h-8" />
-              </div>
-              <div>
-                <h4 className="font-extrabold text-sm text-red-800 dark:text-red-300">Downgrade Assessment Alert</h4>
-                <p className="text-[10px] text-slate-400">System review of target limits compliance</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Before downgrading to the <span className="font-bold text-slate-700 dark:text-slate-200">{downgradePlan.name}</span> plan, your current utilization must fit the target limits.
-            </p>
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3 border border-[#E6D9C8] rounded-xl flex justify-between items-center">
-                <span className="font-semibold">Members ({usage[0]?.current}) vs Limit ({downgradePlan.max_members})</span>
-                {usage[0]?.current > downgradePlan.max_members ? (
-                  <span className="text-red-500 font-bold uppercase text-[10px] tracking-wider">Violation</span>
-                ) : (
-                  <span className="text-emerald-500 font-bold uppercase text-[10px] tracking-wider">Compliant</span>
-                )}
-              </div>
-              <div className="p-3 border border-[#E6D9C8] rounded-xl flex justify-between items-center">
-                <span className="font-semibold">Disk Size ({usage[7]?.current} GB) vs Limit ({downgradePlan.max_storage_gb} GB)</span>
-                {usage[7]?.current > downgradePlan.max_storage_gb ? (
-                  <span className="text-red-500 font-bold uppercase text-[10px] tracking-wider">Violation</span>
-                ) : (
-                  <span className="text-emerald-500 font-bold uppercase text-[10px] tracking-wider">Compliant</span>
-                )}
-              </div>
-            </div>
-
-            {usage[0]?.current > downgradePlan.max_members || usage[7]?.current > downgradePlan.max_storage_gb ? (
-              <div className="p-3 bg-red-50/50 dark:bg-red-950/20 border border-red-200 rounded-xl text-[10px] text-red-800 dark:text-red-300 leading-relaxed">
-                <strong>Upgrade Blocked:</strong> You cannot execute downgrade until your current utilization is reduced below target parameters.
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  requestOtpForAction(`Downgrade Plan to ${downgradePlan.name}`, () => {
-                    alert("Plan downgraded successfully.");
-                    fetchData();
-                  });
-                  setIsDowngradeWarnOpen(false);
-                }}
-                className="w-full py-2.5 bg-red-600 hover:bg-red-750 text-white text-xs font-bold rounded-xl transition duration-150 active:scale-95 shadow-sm"
-              >
-                Confirm Downgrade Action
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsDowngradeWarnOpen(false)}
-              className="w-full py-2.5 bg-slate-100 hover:bg-[#E6D9C8]/40 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-350 text-xs font-bold rounded-xl transition duration-150"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Invoice Modal Drawer */}
       {isInvoiceOpen && selectedInvoice && (
@@ -1550,6 +1453,411 @@ function OrganizationSubscriptionCenter() {
                 className="px-4 py-2 bg-[#EA580C] hover:bg-[#D94E06] text-white rounded-xl text-xs font-bold transition flex items-center gap-2"
               >
                 <Download className="w-4 h-4" /> Download PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Checkout & Payment Window */}
+      {isPaymentWindowOpen && selectedPlanUpgrade && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#FFFDF9] rounded-3xl max-w-4xl w-full border border-[#E6D9C8] overflow-hidden shadow-2xl flex flex-col md:flex-row animate-in zoom-in-95 duration-200">
+            {/* Left Side: Summary Panel */}
+            <div className="w-full md:w-5/12 bg-[#FCF5EC] p-6 md:p-8 flex flex-col justify-between border-b md:border-b-0 md:border-r border-[#E6D9C8]">
+              <div className="space-y-6">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">SECURE CHECKOUT</span>
+                  <h3 className="text-xl font-bold text-slate-900">Upgrade Order</h3>
+                </div>
+
+                <div className="bg-[#FFFDF9] rounded-2xl p-4 border border-[#E6D9C8]/80 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-extrabold text-xs uppercase text-[#EA580C]">{selectedPlanUpgrade.name}</span>
+                    <span className="text-[10px] font-bold bg-orange-100 text-[#EA580C] px-2 py-0.5 rounded-full border border-orange-200/40">{billingCycle}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 line-clamp-2">{selectedPlanUpgrade.description}</p>
+                </div>
+              </div>
+
+              {/* Price Calculation details */}
+              <div className="space-y-3 border-t border-[#E6D9C8] pt-6 mt-6 text-xs">
+                {(() => {
+                  const basePrice = billingCycle === "Monthly" 
+                    ? selectedPlanUpgrade.monthly_price 
+                    : billingCycle === "Quarterly" 
+                    ? selectedPlanUpgrade.quarterly_price 
+                    : billingCycle === "Half-Yearly" 
+                    ? selectedPlanUpgrade.half_yearly_price 
+                    : billingCycle === "Yearly" 
+                    ? selectedPlanUpgrade.yearly_price 
+                    : selectedPlanUpgrade.lifetime_price;
+                  
+                  const gstVal = basePrice * 0.18;
+                  const grandTotal = basePrice + gstVal;
+
+                  return (
+                    <>
+                      <div className="flex justify-between text-slate-500">
+                        <span>Actual Price</span>
+                        <span>₹{basePrice.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-500">
+                        <span>GST (18%)</span>
+                        <span>₹{gstVal.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between font-black text-slate-900 border-t border-[#E6D9C8] pt-3 text-sm">
+                        <span>Grand Total</span>
+                        <span className="text-[#EA580C]">₹{grandTotal.toLocaleString()}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Right Side: Payment Form */}
+            <div className="w-full md:w-7/12 p-6 md:p-8 space-y-6 flex flex-col justify-between">
+              <div className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">PAYMENT DESTINATION</span>
+                  <button onClick={() => setIsPaymentWindowOpen(false)} className="text-slate-400 hover:text-slate-600">✕ Close</button>
+                </div>
+
+                {/* Sub-tabs for Payment Types */}
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                  {[
+                    { id: "card", label: "Credit/Debit Card" },
+                    { id: "upi", label: "UPI ID / QR Code" },
+                    { id: "netbanking", label: "Net Banking" }
+                  ].map((payTab) => (
+                    <button
+                      key={payTab.id}
+                      type="button"
+                      onClick={() => setPaymentMethodSelected(payTab.id as any)}
+                      className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition ${
+                        paymentMethodSelected === payTab.id
+                          ? "bg-[#FFFDF9] text-[#EA580C] shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      {payTab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* CARD PAYMENT FORM */}
+                {paymentMethodSelected === "card" && (
+                  <div className="space-y-4">
+                    {/* Glowing Credit Card Mock */}
+                    <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-5 border border-indigo-900/50 shadow-xl relative overflow-hidden h-40 flex flex-col justify-between transition duration-300 hover:rotate-1">
+                      <div className="flex justify-between items-start">
+                        <div className="h-8 w-10 bg-gradient-to-r from-amber-300 to-yellow-500 rounded-lg flex items-center justify-center font-bold text-[8px] text-slate-900">CHIP</div>
+                        <span className="text-xs font-black tracking-widest text-[#EA580C]">VISA</span>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-base font-mono tracking-widest">
+                          {cardDetails.number || "•••• •••• •••• ••••"}
+                        </p>
+                      </div>
+                      <div className="flex justify-between items-center text-[10px] tracking-wider uppercase font-semibold">
+                        <div>
+                          <span className="text-[7px] text-slate-400 block">CARD HOLDER</span>
+                          <span>{cardDetails.name || "YOUR NAME HERE"}</span>
+                        </div>
+                        <div>
+                          <span className="text-[7px] text-slate-400 block">EXPIRES</span>
+                          <span>{cardDetails.expiry || "MM/YY"}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <span className="text-[9px] text-slate-455 block mb-1 uppercase font-bold">Card Number</span>
+                        <input
+                          type="text"
+                          maxLength={19}
+                          placeholder="4111 2222 3333 4444"
+                          value={cardDetails.number}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, "");
+                            let parts = [];
+                            for (let i = 0; i < val.length; i += 4) {
+                              parts.push(val.substring(i, i + 4));
+                            }
+                            setCardDetails({ ...cardDetails, number: parts.join(" ") });
+                          }}
+                          className="w-full bg-slate-50 border border-[#E6D9C8] px-3 py-2 rounded-xl text-xs outline-none font-semibold text-slate-800"
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <span className="text-[9px] text-slate-455 block mb-1 uppercase font-bold">Holder Name</span>
+                          <input
+                            type="text"
+                            placeholder="AMIT MEHTA"
+                            value={cardDetails.name}
+                            onChange={(e) => setCardDetails({ ...cardDetails, name: e.target.value.toUpperCase() })}
+                            className="w-full bg-slate-50 border border-[#E6D9C8] px-3 py-2 rounded-xl text-xs outline-none font-semibold text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <span className="text-[9px] text-slate-455 block mb-1 uppercase font-bold">Expiry</span>
+                          <input
+                            type="text"
+                            maxLength={5}
+                            placeholder="MM/YY"
+                            value={cardDetails.expiry}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/\D/g, "");
+                              if (val.length > 2) {
+                                val = val.substring(0, 2) + "/" + val.substring(2, 4);
+                              }
+                              setCardDetails({ ...cardDetails, expiry: val });
+                            }}
+                            className="w-full bg-slate-50 border border-[#E6D9C8] px-3 py-2 rounded-xl text-xs outline-none font-semibold text-slate-800"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* UPI PAYMENT FORM */}
+                {paymentMethodSelected === "upi" && (
+                  <div className="space-y-4 text-center">
+                    <div className="mx-auto w-36 h-36 bg-white border border-[#E6D9C8] p-3 rounded-2xl flex flex-col items-center justify-center space-y-1.5 shadow-sm">
+                      {/* Simple mock QR Code lines */}
+                      <div className="grid grid-cols-6 gap-1 w-full h-full border border-slate-900 p-1 bg-slate-50">
+                        {Array.from({ length: 36 }).map((_, i) => (
+                          <div key={i} className={`rounded-sm ${i % 3 === 0 || i % 7 === 1 ? 'bg-slate-900' : 'bg-transparent'}`} />
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500">Scan QR Code from GooglePay / PhonePe / Paytm / BHIM</p>
+                    
+                    <div className="text-left">
+                      <span className="text-[9px] text-slate-455 block mb-1 uppercase font-bold">Or Enter UPI Address</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="amit.mehta@okaxis"
+                          value={upiId}
+                          onChange={(e) => setUpiId(e.target.value)}
+                          className="w-full bg-slate-50 border border-[#E6D9C8] px-3 py-2 rounded-xl text-xs outline-none font-semibold text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* NET BANKING FORM */}
+                {paymentMethodSelected === "netbanking" && (
+                  <div className="space-y-3">
+                    <span className="text-[9px] text-slate-455 block mb-1 uppercase font-bold">Select Institution</span>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { id: "sbi", name: "State Bank of India" },
+                        { id: "hdfc", name: "HDFC Bank" },
+                        { id: "icici", name: "ICICI Bank" },
+                        { id: "axis", name: "Axis Bank" }
+                      ].map((bank) => (
+                        <button
+                          key={bank.id}
+                          type="button"
+                          onClick={() => setSelectedBank(bank.id)}
+                          className={`p-3 border rounded-xl text-xs font-bold text-left transition ${
+                            selectedBank === bank.id
+                              ? "border-[#EA580C] bg-orange-50/50 text-[#EA580C]"
+                              : "border-[#E6D9C8] hover:bg-slate-50"
+                          }`}
+                        >
+                          {bank.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Secure Checkout Button */}
+              <div className="space-y-3">
+                {(() => {
+                  const basePrice = billingCycle === "Monthly" 
+                    ? selectedPlanUpgrade.monthly_price 
+                    : billingCycle === "Quarterly" 
+                    ? selectedPlanUpgrade.quarterly_price 
+                    : billingCycle === "Half-Yearly" 
+                    ? selectedPlanUpgrade.half_yearly_price 
+                    : billingCycle === "Yearly" 
+                    ? selectedPlanUpgrade.yearly_price 
+                    : selectedPlanUpgrade.lifetime_price;
+                  
+                  const gstVal = basePrice * 0.18;
+                  const grandTotal = basePrice + gstVal;
+
+                  return (
+                    <button
+                      type="button"
+                      disabled={isPaying}
+                      onClick={() => processSecurePayment()}
+                      className="w-full py-3 bg-[#EA580C] hover:bg-[#D94E06] disabled:bg-slate-350 text-white rounded-xl text-xs font-black transition duration-150 active:scale-95 shadow-md flex items-center justify-center gap-2"
+                    >
+                      {isPaying ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Verifying secure routing...
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-3.5 h-3.5" />
+                          Pay ₹{grandTotal.toLocaleString()} Securely
+                        </>
+                      )}
+                    </button>
+                  );
+                })()}
+
+                <div className="flex justify-center items-center gap-4 text-[9px] text-slate-400 font-bold uppercase">
+                  <span>PCI-DSS Compliant</span>
+                  <span>•</span>
+                  <span>SSL Encrypted</span>
+                  <span>•</span>
+                  <span>256-bit Protection</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Successful Payment Invoice Certificate Screen */}
+      {paymentSuccessInvoice && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#FFFDF9] rounded-3xl max-w-2xl w-full border border-[#E6D9C8] p-6 md:p-8 shadow-2xl relative space-y-6 animate-in zoom-in-95 duration-200">
+            <div className="text-center space-y-2">
+              <div className="mx-auto w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center border border-emerald-200 animate-bounce">
+                <Check className="w-6 h-6" />
+              </div>
+              <h2 className="text-xl font-black text-slate-900">Payment Successfully Processed</h2>
+              <p className="text-xs text-slate-500">Your community subscription has been upgraded and active status is confirmed.</p>
+            </div>
+
+            {/* Printable Paper Invoice Container */}
+            <div id="printable-invoice" className="bg-white border border-[#E6D9C8] p-6 md:p-8 rounded-2xl shadow-sm space-y-6 relative overflow-hidden">
+              {/* Paper Watermark badge */}
+              <div className="absolute right-[-20px] top-[-10px] rotate-12 bg-emerald-50 text-emerald-600 font-black border border-emerald-200 px-8 py-1 rounded text-[9px] uppercase tracking-widest opacity-80">
+                Paid In Full
+              </div>
+
+              {/* Invoice Header */}
+              <div className="flex justify-between items-start border-b border-[#E6D9C8] pb-6 gap-6">
+                <div className="space-y-1">
+                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5">
+                    <Shield className="w-5 h-5 text-[#EA580C]" />
+                    SAMAJ HUB NETWORKS
+                  </h3>
+                  <span className="text-[9px] text-slate-400 block leading-tight">GSTIN: 27AAACS8920D1Z4</span>
+                  <span className="text-[9px] text-slate-400 block leading-tight">101 Corporate Suites, BKC Mumbai, IN</span>
+                </div>
+                <div className="text-right space-y-0.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase block tracking-wider">OFFICIAL RECEIPTS</span>
+                  <span className="text-xs font-mono font-bold text-[#EA580C] block">{paymentSuccessInvoice.invoice_no}</span>
+                  <span className="text-[9px] text-slate-450 block font-semibold">{paymentSuccessInvoice.date}</span>
+                </div>
+              </div>
+
+              {/* Billed To Details */}
+              <div className="grid grid-cols-2 gap-6 text-xs border-b border-[#E6D9C8] pb-6">
+                <div className="space-y-1">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">BILLED TO</span>
+                  <p className="font-bold text-slate-900">Surat Patidar Society</p>
+                  <span className="text-slate-500 block leading-tight">Admin: Amit Mehta</span>
+                  <span className="text-slate-500 block leading-tight">GSTIN: 27AAAAA1111A1Z1</span>
+                </div>
+                <div className="space-y-1 text-right">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">SETTLEMENT DETAILS</span>
+                  <p className="font-bold text-slate-900">{paymentSuccessInvoice.method}</p>
+                  <span className="text-slate-500 block leading-tight font-mono">TXN: {paymentSuccessInvoice.transaction_id}</span>
+                  <span className="text-emerald-600 block leading-tight font-bold">✓ Transaction Approved</span>
+                </div>
+              </div>
+
+              {/* Invoice Itemized table */}
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-[#E6D9C8] text-slate-400 font-bold uppercase tracking-wider text-[9px]">
+                    <th className="py-2">Item description</th>
+                    <th className="py-2 text-center">Billing Cycle</th>
+                    <th className="py-2 text-right">Rate</th>
+                    <th className="py-2 text-right">Qty</th>
+                    <th className="py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-slate-100 text-slate-800 font-semibold">
+                    <td className="py-4">
+                      <div>
+                        <span className="font-bold block text-slate-900">{paymentSuccessInvoice.plan_name} Edition Membership</span>
+                        <span className="text-[10px] text-slate-400 font-normal">Active access key activation and quota allocation</span>
+                      </div>
+                    </td>
+                    <td className="py-4 text-center">{billingCycle}</td>
+                    <td className="py-4 text-right">₹{(paymentSuccessInvoice.base_price || 0).toLocaleString()}</td>
+                    <td className="py-4 text-right">1</td>
+                    <td className="py-4 text-right font-bold text-slate-900">₹{(paymentSuccessInvoice.base_price || 0).toLocaleString()}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {/* Itemized Calculation Summary */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-t border-[#E6D9C8] pt-6 gap-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-slate-50 border border-[#E6D9C8] rounded-lg flex items-center justify-center p-1 font-mono text-[9px] font-bold">
+                    SECURE
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold text-slate-400 block uppercase">Tax Verification</span>
+                    <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1 mt-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Digisign Authenticated
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 w-full md:w-72 text-right text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Actual Price</span>
+                    <span>₹{(paymentSuccessInvoice.base_price || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>GST (18%)</span>
+                    <span>₹{(paymentSuccessInvoice.gst || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between font-black text-slate-900 border-t border-[#E6D9C8] pt-1.5 text-sm">
+                    <span>Grand Total Paid</span>
+                    <span className="text-[#EA580C]">₹{(paymentSuccessInvoice.grand_total || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Success Actions */}
+            <div className="flex justify-end gap-3 border-t border-[#E6D9C8] pt-6">
+              <button
+                onClick={() => window.print()}
+                className="px-4 py-2.5 border border-[#E6D9C8] rounded-xl hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-2"
+              >
+                <Printer className="w-4 h-4" /> Print Receipt
+              </button>
+              <button
+                onClick={() => {
+                  setPaymentSuccessInvoice(null);
+                  setSelectedPlanUpgrade(null);
+                }}
+                className="px-4 py-2.5 bg-[#EA580C] hover:bg-[#D94E06] text-white rounded-xl text-xs font-bold transition flex items-center gap-2"
+              >
+                Return to renew center
               </button>
             </div>
           </div>

@@ -17,6 +17,7 @@ import {
   Filter, FileSpreadsheet, RefreshCw, CalendarDays, Check, Slash, ChevronLeft, Wallet, Sliders
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { useModulePermissions } from "./community-admin";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
@@ -52,6 +53,7 @@ let isFirstLoad = true;
 
 export function AdminVenues() {
   const { user } = useAuth();
+  const perms = useModulePermissions("venues");
   const search = useSearch({ strict: false }) as any;
   const tabFromSearch = search?.tab as LocalTab;
   const isSuperAdmin = user?.role === "super_admin";
@@ -2854,12 +2856,14 @@ export function AdminVenues() {
                 <h2 className="font-bold text-lg text-foreground tracking-tight">Samaj Active Properties</h2>
                 <p className="text-xs text-warm-muted">Manage locations, assign rooms, and configure scheduling coefficients.</p>
               </div>
-              <Button 
-                onClick={startNewPropertyFlow}
-                className="bg-primary hover:bg-primary/95 text-white rounded-xl font-bold text-xs h-9 px-4 flex items-center gap-1 shadow-sm"
-              >
-                <Plus className="h-4 w-4" /> Add Property
-              </Button>
+              {perms.create && (
+                <Button 
+                  onClick={startNewPropertyFlow}
+                  className="bg-primary hover:bg-primary/95 text-white rounded-xl font-bold text-xs h-9 px-4 flex items-center gap-1 shadow-sm"
+                >
+                  <Plus className="h-4 w-4" /> Add Property
+                </Button>
+              )}
             </div>
 
             {/* Properties Grid */}
@@ -2913,25 +2917,27 @@ export function AdminVenues() {
                         </div>
 
                         {/* Hover Delete Button */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (confirm(`Are you sure you want to delete "${property.name}"? This will remove all associated units, pricing tiers, and waitlists.`)) {
-                              try {
-                                await api.deleteBookingProperty(property.id);
-                                toast.success("Property deleted successfully");
-                                await fetchData();
-                              } catch (err: any) {
-                                toast.error(err.message || "Failed to delete property");
+                        {perms.delete && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (confirm(`Are you sure you want to delete "${property.name}"? This will remove all associated units, pricing tiers, and waitlists.`)) {
+                                try {
+                                  await api.deleteBookingProperty(property.id);
+                                  toast.success("Property deleted successfully");
+                                  await fetchData();
+                                } catch (err: any) {
+                                  toast.error(err.message || "Failed to delete property");
+                                }
                               }
-                            }
-                          }}
-                          className="absolute top-3 left-3 h-8 w-8 rounded-full bg-white/95 text-warm-muted hover:bg-red-50 hover:text-red-600 border border-border/20 z-20 transition-all opacity-0 group-hover:opacity-100 shadow-md flex items-center justify-center"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                            }}
+                            className="absolute top-3 left-3 h-8 w-8 rounded-full bg-white/95 text-warm-muted hover:bg-red-50 hover:text-red-600 border border-border/20 z-20 transition-all opacity-0 group-hover:opacity-100 shadow-md flex items-center justify-center"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
 
                         {/* Title text overlay on cover */}
                         <div className="absolute bottom-3 left-4 right-4 z-20">
@@ -2981,7 +2987,6 @@ export function AdminVenues() {
                             <span className="text-[9px] text-warm-muted uppercase font-bold tracking-widest">Revenue Accrued</span>
                             <span className="text-lg font-black text-emerald-600 mt-0.5 font-mono">{formatCurrency(propRevenue)}</span>
                           </div>
-                          
                           <div className="flex gap-2">
                             <Button
                               size="sm"
@@ -2994,18 +2999,20 @@ export function AdminVenues() {
                             >
                               Details
                             </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                setSelectedPropertyForWizard(property);
-                                setPropertyForm(normalizePropertyForForm(property));
-                                setWorkflowStep(1);
-                                setActiveTab('add-property');
-                              }}
-                              className="bg-primary hover:bg-primary/95 text-white rounded-2xl text-xs font-bold h-9 px-4 shadow-md transition-all duration-200"
-                            >
-                              Edit/Manage
-                            </Button>
+                            {perms.edit && (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedPropertyForWizard(property);
+                                  setPropertyForm(normalizePropertyForForm(property));
+                                  setWorkflowStep(1);
+                                  setActiveTab('add-property');
+                                }}
+                                className="bg-primary hover:bg-primary/95 text-white rounded-2xl text-xs font-bold h-9 px-4 shadow-md transition-all duration-200"
+                              >
+                                Edit/Manage
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </CardContent>
@@ -4537,7 +4544,12 @@ export function AdminVenues() {
           { id: 'ledger', label: 'Confirmed Ledger', icon: CheckCircle2 },
           { id: 'payments', label: 'Bank Transfers', icon: Wallet },
           { id: 'waiting', label: 'Date Waitlists', icon: Clock }
-        ].map(tab => {
+        ].filter(tab => {
+          if (tab.id === 'add-property') {
+            return perms.create || perms.edit;
+          }
+          return true;
+        }).map(tab => {
           const isActive = activeTab === tab.id;
           return (
             <button
